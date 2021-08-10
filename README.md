@@ -55,9 +55,8 @@ $SEG_ROOT/data
 ├── deepglob
 │   ├── land-train
 │   └── land_train_gt_processed
-
-note Histo_MRI is the PCa-histo dataset
 ````
+note Histo_MRI is the PCa-histo dataset
 
 3. Data list .odgt files are provided in ```./data``` prepare correspondingly for local datasets
 
