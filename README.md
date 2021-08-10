@@ -2,7 +2,7 @@
 
 This is a PyTorch implementation of Learning to Downsample for Segmentation of Ultra-High Resolution Images.
 
-### Table of Contents
+## Table of Contents
 1. [Environment-Setup](#environment-Setup)
 1. [Data-preparation](#data-preparation)
 1. [Reproduce](#reproduce)
@@ -33,9 +33,9 @@ conda activate deform_seg_env
 
 
 ## Data preparation
-1. Download the [Cityscapes](https://www.cityscapes-dataset.com/), [DeepGlobe](https://competitions.codalab.org/competitions/18468) and [PCa-histo](to-be-released) datasets.
+- Download the [Cityscapes](https://www.cityscapes-dataset.com/), [DeepGlobe](https://competitions.codalab.org/competitions/18468) and [PCa-histo](to-be-released) datasets.
 
-2. Your directory tree should be look like this:
+- Your directory tree should be look like this:
 ````bash
 $SEG_ROOT/data
 ├── cityscapes
@@ -61,13 +61,13 @@ $SEG_ROOT/data
 note Histo_MRI is the PCa-histo dataset
 ````
 
-3. Data list .odgt files are provided in ```./data``` prepare correspondingly for local datasets
+- Data list .odgt files are provided in ```./data``` prepare correspondingly for local datasets
 
 
 ## Reproduce
 full configuration bash provided to reproduced paper results, suitable for large scale experiment in multiple GPU Environment, Syncronized Batch Normalization are deployed.
 
-### Training
+- Training
 Train a model by selecting the GPUs (```$GPUS```) and configuration file (```$CFG```) to use. During training, last checkpoints by default are saved in folder ```ckpt```.
 ```bash
 python3 train_fove.py --gpus $GPUS --cfg $CFG
@@ -90,7 +90,7 @@ bash quick_start_bash/pcahisto_80_800_uniform.sh
 * You can also override options in commandline, for example  ```python3 train_deform.py TRAIN.num_epoch 10 ```.
 
 
-### Evaluation
+- Evaluation
 1. Evaluate a trained model on the validation set, simply override following options ```TRAIN.start_epoch 125 TRAIN.num_epoch 126 TRAIN.eval_per_epoch 1 TRAIN.skip_train_for_eval True```
 
 * Alternatively, you can quick start with provided bash script:
