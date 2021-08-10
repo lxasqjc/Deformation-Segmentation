@@ -1,0 +1,8 @@
+*.pyc
+*.log
+*.pth
+*.jpg
+ckpt/
+vis/
+log/
+pretrained/

@@ -1,0 +1,68 @@
+DATASET:
+  root_dataset: "SEG_ROOT/data/histomri/"
+  list_train: "./data/Histo_MRI/full_train_list_200.odgt"
+  list_val: "./data/Histo_MRI/full_val_list_27.odgt"
+  grid_path: "./data/Cityscape/grid_1024_2048.png"
+  num_class: 6
+  imgSizes: (8284, )
+  imgMaxSize: 1
+  padding_constant: 4
+  segm_downsampling_rate: 1
+  random_flip: "Flip"
+
+MODEL:
+  arch_encoder: "hrnetv2_nodownsp"
+  arch_decoder: "c1"
+  fc_dim: 720
+  fov_deform: True
+  deep_fov: 'deep_fov1'
+  in_dim: 3
+  gaussian_radius: 10
+  cropped_lists: []
+  gaussian_ap: 1.0
+  naive_upsample: False
+  gt_gradient_intrinsic_only: False
+
+TRAIN:
+  batch_size_per_gpu: 1
+  fov_location_step: 4
+  auto_fov_location_step: False
+  sync_location: 'mean_mbs'
+  mini_batch_size: 2
+  num_epoch: 200
+  start_epoch: 0
+  epoch_iters: 100
+  optim: "adam"
+  lr_encoder: 2e-5
+  lr_decoder: 2e-5
+  lr_foveater: 2e-5
+  lr_pow: 0.9
+  beta1: 0.9
+  weight_decay: 1e-4
+  weight_decay_fov: 1e-4
+  deep_sup_scale: 0.4
+  fixed_edge_loss_scale: 100.0
+  fix_bn: False
+  opt_deform_LabelEdge_softmax: False
+  workers: 16
+  disp_iter: 20
+  seed: 304
+  save_checkpoint: True
+  lr_mult_encoder: 0.001
+  lr_mult_decoder: 0.001
+  lr_mult_saliency: 0.001
+  lr_mult_compress: 0.001
+
+VAL:
+  visualize: False
+  checkpoint: "epoch_last.pth"
+  hard_max_fov: False
+  max_score: False
+  central_crop: False
+  F_Xlr_low_scale: 0
+
+TEST:
+  checkpoint: "epoch_50.pth"
+  result: "./"
+
+DIR: "ckpt/Pcahisto_DTin_80_800"

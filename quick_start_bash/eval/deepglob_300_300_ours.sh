@@ -1,0 +1,1 @@
+python3 train_deform.py --gpus 0-1 --cfg config/deform-deepglob.yaml DATASET.root_dataset 'SEG_ROOT/data/deepglob' TRAIN.task_input_size '(300,300)' TRAIN.num_epoch 200 TRAIN.eval_per_epoch 200 DIR "ckpt/Deepglobe_Tin_300_300_ours" TRAIN.deform_joint_loss True TRAIN.start_epoch 200 TRAIN.num_epoch 201 TRAIN.eval_per_epoch 1 TRAIN.skip_train_for_eval True

@@ -1,0 +1,64 @@
+DATASET:
+  root_dataset: "SEG_ROOT/data/deepglob/"
+  list_train: "./data/DeepGlob/labd_train_list_803_shuff_455.odgt"
+  list_val: "./data/DeepGlob/labd_train_list_803_shuff_207.odgt"
+  grid_path: "./data/DeepGlob/grid_2448_2448.png"
+  num_class: 7
+  imgSizes: (2448, )
+  imgMaxSize: 2448
+  padding_constant: 4
+  segm_downsampling_rate: 1
+  random_flip: "Flip"
+  ignore_index: 6
+
+MODEL:
+  arch_encoder: "hrnetv2_nodownsp"
+  arch_decoder: "c1"
+  fc_dim: 720
+  fov_deform: True
+  deep_fov: "deep_fov1"
+  in_dim: 3
+  naive_upsample: False
+  gt_gradient_intrinsic_only: False
+  rev_deform_interp: 'nearest'
+  ignore_gt_labels: '[6]'
+
+TRAIN:
+  batch_size_per_gpu: 2
+  num_epoch: 200
+  start_epoch: 0
+  epoch_iters: 114
+  optim: "adam"
+  lr_encoder: 2e-5
+  lr_decoder: 2e-5
+  lr_foveater: 2e-5
+  lr_pow: 0.9
+  beta1: 0.9
+  weight_decay: 1e-4
+  weight_decay_fov: 1e-4
+  deep_sup_scale: 0.4
+  fix_bn: False
+  opt_deform_LabelEdge_softmax: False
+  workers: 4
+  disp_iter: 20
+  seed: 304
+  save_checkpoint: True
+  saliency_input_size: '(300,300)'
+  lr_mult_encoder: 0.001
+  lr_mult_decoder: 0.001
+  lr_mult_saliency: 0.001
+  lr_mult_compress: 0.001
+
+VAL:
+  visualize: False
+  checkpoint: "epoch_last.pth"
+  hard_max_fov: False
+  max_score: False
+  central_crop: False
+  F_Xlr_low_scale: 0
+
+TEST:
+  checkpoint: "epoch_50.pth"
+  result: "./"
+
+DIR: "ckpt/Deepglobe_Tin_300_300"
