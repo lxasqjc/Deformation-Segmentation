@@ -1,12 +1,10 @@
 # Learning to Downsample for Segmentation of Ultra-High Resolution Images in PyTorch
 
-[![License](http://creativecommons.org/licenses/by-nc-sa/4.0/)](LICENSE.md)
-
 This is a PyTorch implementation of [Learning to Downsample for Segmentation of Ultra-High Resolution Images](https://lxasqjc.github.io/learn-downsample.github.io/) which published at [ICLR 2022](https://openreview.net/forum?id=HndgQudNb91).
 
 ## Updates
 - ICLR 2022 talk available [HERE](https://recorder-v3.slideslive.com/?share=63834&s=2a9de36c-8627-40cd-9fa5-ef8accc61cca)
-- More details/examples/video demos available [HERE](https://lxasqjc.github.io/learn-downsample.github.io/)
+- For more details/examples/video demos visit our project page [HERE](https://lxasqjc.github.io/learn-downsample.github.io/)
 
 
 ### Table of Contents
