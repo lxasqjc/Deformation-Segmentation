@@ -48,13 +48,10 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
     for i in range(cfg.TRAIN.epoch_iters):
         # load a batch of data
         batch_data = next(iterator)
-        # print('type_batch_data: {}\n'.format(type(batch_data)))
-        # print('len_batch_data: {}\n'.format(len(batch_data)))
         if len(batch_data) == 1:
             batch_data = batch_data[0]
             single_gpu_mode = True
             print('single gpu mode ON \n')
-            # print('type batch_data: {}\n'.format(type(batch_data)))
             batch_data['img_data'] = batch_data['img_data'].cuda()
             batch_data['seg_label'] = batch_data['seg_label'].cuda()
             batch_data = [batch_data]
@@ -100,22 +97,16 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
                     loss, acc, y_print, y_sampled, edge_loss = segmentation_module(batch_data)
                 else:
                     loss, acc, y_print, y_sampled = segmentation_module(batch_data)
-                # print(type(y_print))
-                print(y_print.shape)
-                # print(type(y_sampled))
-                print(y_sampled.shape)
                 y_print = y_print[0]
                 y_sampled = y_sampled[0]
                 colors = loadmat('data/color150.mat')['colors']
                 y_color = colorEncode(as_numpy(y_print), colors)
                 y_print = torch.from_numpy(y_color.astype(np.uint8)).unsqueeze(0).permute(0,3,1,2)
-                print('train/y_original size: {}'.format(y_print.shape))
                 y_print = vutils.make_grid(y_print, normalize=False, scale_each=True)
 
                 if not cfg.MODEL.naive_upsample:
                     y_sampled_color = colorEncode(as_numpy(y_sampled), colors)
                     y_sampled_print = torch.from_numpy(y_sampled_color.astype(np.uint8)).unsqueeze(0).permute(0,3,1,2)
-                    print('train/y_sampled size: {}'.format(y_sampled_print.shape))
                     y_sampled_print = vutils.make_grid(y_sampled_print, normalize=False, scale_each=True)
 
                 writer.add_image('train/Label Original', y_print, cur_iter)
@@ -123,8 +114,6 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
             else:
                 if cfg.TRAIN.opt_deform_LabelEdge and epoch >= cfg.TRAIN.fix_seg_start_epoch and epoch <= cfg.TRAIN.fix_seg_end_epoch:
                     loss, acc, edge_loss = segmentation_module(batch_data)
-                    # if epoch == cfg.TRAIN.opt_deform_LabelEdge_sepTrainPre:
-                    #     cfg.TRAIN.opt_deform_LabelEdge = False
                 elif cfg.TRAIN.separate_optimise_deformation and epoch >= cfg.TRAIN.fix_seg_start_epoch and epoch <= cfg.TRAIN.fix_seg_end_epoch:
                     loss, acc, save_print_grad = segmentation_module(batch_data)
                     if cur_iter > 0:
@@ -139,8 +128,6 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
                         cfg.TRAIN.separate_optimise_deformation = False
                         cfg.MODEL.rev_deform_interp = 'nearest'
                         cfg.VAL.y_sampled_reverse = True
-                # elif cfg.TRAIN.opt_deform_LabelEdge and epoch > cfg.TRAIN.opt_deform_LabelEdge_sepTrainPre:
-                #     loss, acc, save_print_grad = segmentation_module(batch_data)
                 elif cfg.TRAIN.deform_joint_loss:
                     if cfg.DATASET.check_dataload:
                         loss, acc, edge_loss = segmentation_module(batch_data, writer=writer)
@@ -163,7 +150,6 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
         if loss is None and acc is None:
             print('A-skip iter: {}\n'.format(i))
             continue
-        # print()
         loss_step = loss.mean()
         acc_step = acc.mean()
 
@@ -172,7 +158,6 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
             loss_step.backward()
 
             if cfg.MODEL.fov_deform:
-                # (optimizer) = optimizers
                 for optimizer in optimizers:
                     if cfg.TRAIN.fix_deform_aft_pretrain and epoch >= cfg.TRAIN.fix_deform_start_epoch and epoch <= cfg.TRAIN.fix_deform_end_epoch:
                         if optimizer.param_groups[0]['zoom']==False: # update segmentation module only
@@ -192,15 +177,9 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
         if cfg.TRAIN.deform_joint_loss:
             ave_edge_loss.update(edge_loss.mean().data.item())
 
-        # if loss is None and acc is None:
-        #     print('B-skip iter: {}\n'.format(i))
-        #     continue
-
         # measure elapsed time
         batch_time.update(time.time() - tic)
         tic = time.time()
-
-
 
         # calculate accuracy, and display
         if i % cfg.TRAIN.disp_iter == 0:
@@ -284,14 +263,6 @@ def checkpoint_last(nets, cfg, epoch):
 
 def checkpoint_history(history, cfg, epoch):
     print('Saving history...')
-    # print('epoch: {}\ntrain_loss: {}\ntrain_acc: {}\nval_miou: {}\nval_acc: {}\nval_deformed_miou: {}\nval_y_reverse_miou: {}\nnum_valid_samples: {}\n'.format(history['save']['epoch']
-    # , history['save']['train_loss']
-    # , history['save']['train_acc']
-    # , history['save']['val_iou']
-    # , history['save']['val_acc']
-    # , history['save']['val_iou_deformed']
-    # , history['save']['val_iou_y_reverse']
-    # , history['save']['num_valid_samples']))
     # save history as csv
     data_frame = pd.DataFrame(
         data={'epoch': history['save']['epoch']
@@ -376,12 +347,6 @@ def create_optimizers(nets, cfg):
 
     elif cfg.TRAIN.optim.lower() == 'adam':
         if cfg.MODEL.fov_deform:
-            # optimizer = torch.optim.Adam([
-            #         {'params': net_encoder.parameters(),'lr_mult':cfg.TRAIN.lr_mult_encoder,'zoom':False},
-            #         {'params': net_decoder.parameters(),'lr_mult':cfg.TRAIN.lr_mult_decoder,'zoom':False},
-            #         {'params': net_saliency.parameters(),'lr_mult':cfg.TRAIN.lr_mult_saliency,'zoom':True},
-            #         {'params': net_compress.parameters(),'lr_mult':cfg.TRAIN.lr_mult_compress,'zoom':True}
-            #         ],lr =cfg.TRAIN.lr_encoder,weight_decay=cfg.TRAIN.weight_decay)
             optimizer_encoder = torch.optim.Adam(
                 [{'params': net_encoder.parameters(),'lr_mult':cfg.TRAIN.lr_mult_encoder,'zoom':False}],
                 lr=cfg.TRAIN.lr_encoder,
@@ -429,7 +394,6 @@ def adjust_edge_loss_scale(cur_iter, cfg):
     print('scaled edge_loss_scale: ', cfg.TRAIN.edge_loss_scale)
 
 def adjust_learning_rate(optimizers, cur_iter, cfg, lr_mbs = False, f_max_iter=1, lr_scale=1, wd_scale=1, epoch=None):
-    # print('adjusted max_iter:', cfg.TRAIN.max_iters)
     scale_running_lr = ((1. - float(cur_iter) / f_max_iter) ** cfg.TRAIN.lr_pow)
     if not lr_mbs:
         scale_running_lr = ((1. - float(cur_iter) / cfg.TRAIN.max_iters) ** cfg.TRAIN.lr_pow)
@@ -446,9 +410,6 @@ def adjust_learning_rate(optimizers, cur_iter, cfg, lr_mbs = False, f_max_iter=1
         scale_running_lr /= lr_scale
     cfg.TRAIN.running_lr_foveater = cfg.TRAIN.lr_foveater * scale_running_lr
     if cfg.MODEL.fov_deform:
-        # (optimizer) = optimizers
-        # for param_group in optimizer.param_groups:
-        #     param_group['lr'] = param_group['lr_mult']*cfg.TRAIN.running_lr_foveater
         base_lr = 0.1
         N_pretraining_base = cfg.TRAIN.deform_pretrain
 
@@ -459,9 +420,6 @@ def adjust_learning_rate(optimizers, cur_iter, cfg, lr_mbs = False, f_max_iter=1
             N_pretraining = N_pretraining_base
             lr_idx = epoch
 
-        # lr_class -> for segmentation_module; lr_zoom -> DeformSegmentationModule
-        # pretrain stage, same lr for both deform and seg module
-        # non-pretrain stage, larger lr for seg module by larger lr_class (i.e. segmentation_module)
         if cfg.TRAIN.deform_pretrain_bol:
             lr_class = base_lr*0.1**(lr_idx//N_pretraining)
             lr_zoom = base_lr*0.1**(lr_idx//N_pretraining)
@@ -498,17 +456,6 @@ def adjust_learning_rate(optimizers, cur_iter, cfg, lr_mbs = False, f_max_iter=1
 
 
 def main(cfg, gpus):
-    # wandb.init()
-    # ###============== IMPORT SALIENCY LIBS ===========###
-    # if cfg.MODEL.rev_deform_opt == 1:
-    #     from saliency_sampler_normal_reverse_saliency import Saliency_Sampler
-    # elif cfg.MODEL.rev_deform_opt == 2:
-    #     from saliency_sampler_normal_reverse_saliency_deconv import Saliency_Sampler
-    # elif cfg.MODEL.rev_deform_opt == 3:
-    #     from saliency_sampler_normal_reverse_deconv_pad import Saliency_Sampler
-    # elif cfg.MODEL.rev_deform_opt == 4 or cfg.MODEL.rev_deform_opt == 5 or cfg.MODEL.rev_deform_opt == 6 or cfg.MODEL.rev_deform_opt == 51:
-    #     from saliency_sampler_inv_fill_NN import Saliency_Sampler
-
     ###============== DEFINE LOSSES ===========###
     if cfg.DATASET.root_dataset == '/scratch0/chenjin/GLEASON2019_DATA/Data/':
         if cfg.TRAIN.loss_fun == 'DiceLoss':
@@ -530,7 +477,6 @@ def main(cfg, gpus):
         if cfg.TRAIN.loss_fun == 'NLLLoss':
             crit = nn.NLLLoss(ignore_index=19)
         elif cfg.TRAIN.loss_fun == 'DiceLoss':
-            # crit = DiceLoss(ignore_index=19)
             crit = DiceLoss('multiclass', ignore_index=19)
         else:
             if cfg.TRAIN.loss_weight != []:
@@ -571,7 +517,6 @@ def main(cfg, gpus):
                 crit = nn.CrossEntropyLoss(ignore_index=cfg.DATASET.ignore_index)
             else:
                 crit = nn.CrossEntropyLoss(ignore_index=-2)
-    # crit = DiceCoeff()
 
     ###============== Network Builders ===========###
     net_encoder = ModelBuilder.build_encoder(
@@ -604,12 +549,6 @@ def main(cfg, gpus):
     print('Number of SegmentationModule params: %.2fM \n' % (total / 1e6))
 
 
-
-    ###============== Load deformation model if start_epoch > 0===========###
-    # if cfg.TRAIN.start_epoch > 0 and cfg.MODEL.fov_deform:
-    #     weights = os.path.join(cfg.DIR, 'model_epoch_{}.pth'.format(fg.TRAIN.start_epoch))
-    #     segmentation_module.load_state_dict(
-    #         torch.load(weights, map_location=lambda storage, loc: storage), strict=True)
 
     ###============== SET UP OPTIMIZERS ===========###
     if cfg.MODEL.fov_deform:
@@ -645,10 +584,6 @@ def main(cfg, gpus):
         history['save']['val_iou_deformed_class_'+str(c)] = []
         history['save']['val_iou_y_reverse_class_'+str(c)] = []
     if cfg.TRAIN.start_epoch > 0:
-        # epoch,train_loss,train_acc,val_miou,val_acc,val_deformed_miou,val_y_reverse_miou,num_valid_samples,
-        # val_iou_class_0,val_iou_deformed_class_0,val_iou_y_reverse_class_0,val_iou_class_1,val_iou_deformed_class_1,
-        # val_iou_y_reverse_class_1,val_iou_class_2,val_iou_deformed_class_2,val_iou_y_reverse_class_2,val_iou_class_3,
-        # val_iou_deformed_class_3,val_iou_y_reverse_class_3
         history_previous_epoches = pd.read_csv('{}/history_epoch_{}.csv'.format(cfg.DIR, cfg.TRAIN.start_epoch))
         history['save']['epoch'] = list(history_previous_epoches['epoch'])
         history['save']['train_loss'] = list(history_previous_epoches['train_loss'])
@@ -662,12 +597,10 @@ def main(cfg, gpus):
             history['save']['val_iou_deformed'] = list(history_previous_epoches['val_deformed_miou'])
         else:
             history['save']['val_iou_deformed'] = ['' for i in range(len(history['save']['epoch']))]
-            # history['save']['val_acc_deformed'] = list(history_previous_epoches['val_acc_deformed'])
         if 'val_iou_y_reverse' in history_previous_epoches:
             history['save']['val_iou_y_reverse'] = list(history_previous_epoches['val_y_reverse_miou'])
         else:
             history['save']['val_iou_y_reverse'] = ['' for i in range(len(history['save']['epoch']))]
-            # history['save']['val_acc_y_reverse'] = list(history_previous_epoches['val_acc_y_reverse'])
         if cfg.VAL.dice:
             if 'val_dice' in history_previous_epoches:
                 history['save']['val_dice'] = list(history_previous_epoches['val_dice'])
@@ -714,8 +647,6 @@ def main(cfg, gpus):
     ###============== MAIN LOOP ===========###
     for epoch in range(cfg.TRAIN.start_epoch, cfg.TRAIN.num_epoch):
         cfg.TRAIN.global_epoch = epoch+1
-        # if cfg.TRAIN.stage_adjust_edge_loss != 1.0 and epoch >= cfg.TRAIN.adjust_edge_loss_start_epoch and epoch <= cfg.TRAIN.adjust_edge_loss_end_epoch:
-        #     cfg.TRAIN.fixed_edge_loss_scale = cfg.TRAIN.stage_adjust_edge_loss
 
         if not cfg.TRAIN.skip_train_for_eval:
 
@@ -752,9 +683,7 @@ def main(cfg, gpus):
                 relative_eval_y_ysample_last = relative_eval_y_ysample
                 initial_relative_eval_y_ysample_last = False
             else:
-                # print(type(relative_eval_y_ysample_last))
                 for i in range(len(relative_eval_y_ysample_last)):
-                    # print(relative_eval_y_ysample_last[i] - relative_eval_y_ysample[i])
                     writer.add_scalars('Eval step incremental Y_sampled-Y distribution', {'Class {}'.format(i): relative_eval_y_ysample_last[i] - relative_eval_y_ysample[i]}, epoch+1)
                 relative_eval_y_ysample_last = relative_eval_y_ysample
 
@@ -796,15 +725,9 @@ def main(cfg, gpus):
                 history['save']['val_iou_deformed_class_'+str(c)].append(iou_deformed[c])
                 if cfg.VAL.y_sampled_reverse:
                     history['save']['val_iou_y_reverse_class_'+str(c)].append(iou_y_reverse[c])
-            # write to tensorboard
 
-
-            # writer.add_scalar('Acc/val', val_acc, epoch+1)
-            # writer.add_scalar('Acc/val_deformed', val_acc_deformed, epoch+1)
             writer.add_scalars('Acc', {'val': val_acc}, epoch+1)
             writer.add_scalars('Acc', {'val_deformed': val_acc_deformed}, epoch+1)
-            # writer.add_scalar('mIoU/val', val_iou, epoch+1)
-            # writer.add_scalar('mIoU/val_deformed', val_iou_deformed, epoch+1)
             writer.add_scalars('mIoU', {'val': val_iou}, epoch+1)
             writer.add_scalars('mIoU', {'val_deformed': val_iou_deformed}, epoch+1)
             if cfg.VAL.y_sampled_reverse:
@@ -817,12 +740,9 @@ def main(cfg, gpus):
             else:
                 history['save']['val_iou_y_reverse'].append('n/a')
                 history['save']['val_acc_y_reverse'].append('n/a')
-            # writer.add_scalar('Acc_deformed/val', val_acc_deformed, epoch+1)
-            # writer.add_scalar('mIoU_deformed/val', val_iou_deformed, epoch+1)
             if cfg.VAL.dice:
                 writer.add_scalar('mDice/val', val_dice, epoch+1)
                 writer.add_scalar('mDice/val_deformed', val_dice_deformed, epoch+1)
-                # writer.add_scalar('mDice_deformed/val', val_dice_deformed, epoch+1)
         else:
             history['save']['epoch'].append(epoch+1)
             history['save']['train_loss'].append(history['train']['loss'][-1])
@@ -840,19 +760,15 @@ def main(cfg, gpus):
             history['save']['num_valid_samples'].append('')
             if cfg.TRAIN.deform_joint_loss:
                 history['save']['train_edge_loss'].append('')
-            # write to tensorboard
             writer.add_scalar('Loss/train', history['train']['loss'][-1], epoch+1)
             writer.add_scalar('Acc/train', history['train']['acc'][-1]*100, epoch+1)
             if cfg.TRAIN.deform_joint_loss:
                 writer.add_scalar('edge_loss/train', history['train']['edge_loss'][-1], epoch+1)
-            # writer.add_scalar('Acc/val', '', epoch+1)
-            # writer.add_scalar('mIoU/val', '', epoch+1)
             for c in range(cfg.DATASET.num_class):
                 history['save']['val_iou_class_'+str(c)].append('')
                 history['save']['val_iou_deformed_class_'+str(c)].append('')
                 if cfg.VAL.y_sampled_reverse:
                     history['save']['val_iou_y_reverse_class_'+str(c)].append('')
-
         # saving history
         checkpoint_history(history, cfg, epoch+1)
 

@@ -76,33 +76,19 @@ def evaluate(segmentation_module, loader, cfg, gpu_id, result_queue, foveation_m
 
             batch_data[0]['info'] = info_list
 
-        # print('batch_data length: {}'.format(len(batch_data)))
-        # # print('batch_data[0] dict: {}'.format(batch_data[0]))
-        # print('batch_data[0] length: {}'.format(len(batch_data[0])))
-        # print('batch_data[0][img_data] length: {}'.format(len(batch_data[0]['img_data'])))
-        # print('batch_data[0][img_data][0] shape: {}'.format(batch_data[0]['img_data'][0].shape))
-        # print('batch_data[0][img_data][0] type: {}'.format(type(batch_data[0]['img_data'][0])))
-        # print('batch_data[0][info]: {}'.format(batch_data[0]['info']))
-        # print('batch_data[0][seg_label] shape: {}\n'.format(batch_data[0]['seg_label'].shape))
-        # print('batch_data[0][seg_label][0] shape: {}\n'.format(batch_data[0]['seg_label'][0].shape))
-
         batch_data = batch_data[0]
         if not cfg.VAL.test:
             if cfg.VAL.batch_size > 1:
                 seg_label = as_numpy(batch_data['seg_label'])
             else:
                 seg_label = as_numpy(batch_data['seg_label'][0])
-        # print('seg_label shape: {}\n'.format(seg_label.shape))
         img_resized_list = batch_data['img_data']
         img_resized_list_unnorm = batch_data['img_data_unnorm']
-        # note for foveation resize not applied, i.e. both seg_label and img_data are at original size
+
         if cfg.VAL.visualize and cfg.MODEL.foveation and cfg.VAL.foveated_expection:
             foveated_expection = torch.zeros(batch_data['img_ori'].shape)
-            # if cfg.VAL.hard_max_fov:
             foveated_expection_temp = torch.cat([foveated_expection.unsqueeze(0), foveated_expection.unsqueeze(0)])
             foveated_expection_weight =  torch.zeros(foveated_expection_temp.shape[0:-1]) # 2,w,h
-            # else:
-            #     overlap_count = torch.zeros(batch_data['img_ori'].shape)
 
         with torch.no_grad():
             segSize = (seg_label.shape[-2], seg_label.shape[-1])
@@ -445,10 +431,6 @@ def evaluate(segmentation_module, loader, cfg, gpu_id, result_queue, foveation_m
                 else:
                     h_dists.append(np.nan)
 
-        # flatten for confusion confusion_matrix
-        # pred_flatten = pred.flatten()
-        # seg_label_flatten = seg_label.flatten()
-        # calculate the confusion matrix and add to the accumulated matrix
         if 'CITYSCAPES' in cfg.DATASET.root_dataset:
             confusion += confusion_matrix(seg_label, pred, seg_label.shape, cfg.DATASET.num_class, ignore=20-1)
         else:
@@ -466,14 +448,9 @@ def evaluate(segmentation_module, loader, cfg, gpu_id, result_queue, foveation_m
             patch_bank_F_Xlr = torch.tensor(patch_bank).to(F_Xlr.device)
             F_Xlr = patch_bank_F_Xlr.unsqueeze(-1).unsqueeze(-1).float()*(F_Xlr.squeeze(0)).float()
             F_Xlr = as_numpy(F_Xlr.cpu())
-            # F_Xlr = as_numpy(F_Xlr.squeeze(0).cpu())
-            # print('F_Xlr_np', F_Xlr.shape)
             # t,b,d,w,h
             F_Xlr = np.sum(F_Xlr,axis=0)
-            # print('F_Xlr_sum', F_Xlr.shape)
-            # print(F_Xlr)
             F_Xlr = np.expand_dims(F_Xlr,axis=0)
-            # print('F_Xlr_expand_dims', F_Xlr.shape)
             if cfg.VAL.all_F_Xlr_time:
                 F_Xlr_info = (F_Xlr, batch_data['info'].split('/')[-1].split('.')[0], F_Xlr_score)
                 result_queue.put_nowait((acc, pix, intersection, union, confusion, area_lab, F_Xlr_info, h_dists))
@@ -485,20 +462,14 @@ def evaluate(segmentation_module, loader, cfg, gpu_id, result_queue, foveation_m
 
         # visualization
         if cfg.VAL.visualize:
-            # seg_label = convert_label(label=seg_label, inverse=True)
             visualize_result(
                 (batch_data['img_ori'], seg_label, batch_data['info']),
                 pred,
                 os.path.join(cfg.DIR, "{}result_{}".format(cfg.VAL.rename_eval_folder, cfg.VAL.checkpoint))
                 )
             if cfg.MODEL.foveation and cfg.VAL.foveated_expection:
-                # if not cfg.VAL.hard_max_fov:
-                #     foveated_expection = foveated_expection / overlap_count
                 foveated_expection = as_numpy(foveated_expection.cpu())
                 # b,d,w,h
-                # bright -> fine high resolution, dark -> coarse low resolution
-                # normalize F_Xlr
-                # np.savetxt(os.path.join(cfg.DIR, "result_{}".format(cfg.VAL.checkpoint), "un_scaled_F_Xlr.txt"), as_numpy(F_Xlr.cpu()))
                 F_Xlr = F_Xlr_cp
                 F_Xlr = (F_Xlr-torch.min(F_Xlr))/(torch.max(F_Xlr)-torch.min(F_Xlr))
                 F_Xlr = b_imresize((1-F_Xlr), (segSize[0], segSize[1]), interp='nearest')
@@ -532,18 +503,13 @@ def evaluate_train(segmentation_module, loader, cfg, gpu_id, result_queue, fovea
         # note for foveation resize not applied, i.e. both seg_label and img_data are at original size
         if cfg.VAL.visualize and cfg.MODEL.foveation:
             foveated_expection = torch.zeros(batch_data['img_ori'].shape)
-            # if cfg.VAL.hard_max_fov:
             foveated_expection_temp = torch.cat([foveated_expection.unsqueeze(0), foveated_expection.unsqueeze(0)])
             foveated_expection_weight =  torch.zeros(foveated_expection_temp.shape[0:-1]) # 2,w,h
-            # else:
-            #     overlap_count = torch.zeros(batch_data['img_ori'].shape)
 
         with torch.no_grad():
             segSize = (seg_label.shape[0], seg_label.shape[1])
             scores = torch.zeros(cfg.VAL.batch_size, cfg.DATASET.num_class, segSize[0], segSize[1])
             scores_tmp = torch.zeros(1, cfg.DATASET.num_class, segSize[0], segSize[1])
-            # scores = async_copy_to(scores, gpu_id)
-            # scores_tmp = async_copy_to(scores_tmp, gpu_id)
 
             if cfg.VAL.max_score:
                 scores_tmp_2 = torch.cat([scores_tmp.unsqueeze(0), scores_tmp.unsqueeze(0)])
@@ -555,7 +521,6 @@ def evaluate_train(segmentation_module, loader, cfg, gpu_id, result_queue, fovea
                 feed_dict['img_data_unnorm'] = img_resized_list_unnorm[idx]
                 del feed_dict['img_ori']
                 del feed_dict['info']
-                # feed_dict = async_copy_to(feed_dict, gpu_id)
 
                 # Foveation
                 if cfg.MODEL.foveation:
@@ -564,7 +529,6 @@ def evaluate_train(segmentation_module, loader, cfg, gpu_id, result_queue, fovea
                     with torch.no_grad():
                         patch_segSize = (patch_bank[0], patch_bank[0]*cfg.MODEL.patch_ap)
                         patch_scores = torch.zeros(cfg.VAL.batch_size, cfg.DATASET.num_class, patch_segSize[0], patch_segSize[1])
-                        # patch_scores = async_copy_to(patch_scores, gpu_id)
 
                     fov_map_scale = cfg.MODEL.fov_map_scale
                     # NOTE: although here we use batch imresize yet in practical batch size for X = 1
@@ -580,7 +544,6 @@ def evaluate_train(segmentation_module, loader, cfg, gpu_id, result_queue, fovea
                                 patch_data, F_Xlr, Y_patch_cord, X_patches_cords, X_patches_unnorm = foveation_module(feed_dict, train_mode=False)
                             else:
                                 patch_data, F_Xlr, Y_patch_cord = foveation_module(feed_dict, train_mode=False)
-                            # TODO: foveation (pre_cropped available)
                             patch_scores = segmentation_module(patch_data, segSize=patch_segSize)
 
                             cx_Y, cy_Y, patch_size_Y, p_y_w, p_y_h = Y_patch_cord
@@ -588,8 +551,6 @@ def evaluate_train(segmentation_module, loader, cfg, gpu_id, result_queue, fovea
                                 # p_y = max(patch_bank[0], patch_bank[0]*cfg.MODEL.patch_ap)
                                 scores_tmp_pad = torch.zeros(scores_tmp.shape)
                                 scores_tmp_pad = F.pad(scores_tmp_pad, (p_y_w,p_y_w,p_y_h,p_y_h))
-                                # scores_tmp_pad = async_copy_to(scores_tmp_pad, gpu_id)
-                                # print('scores_tmp_pad shape: ', scores_tmp_pad.shape)
                             patch_size_Y_x = patch_size_Y
                             patch_size_Y_y = patch_size_Y*cfg.MODEL.patch_ap
                             if not cfg.VAL.max_score:
@@ -610,8 +571,6 @@ def evaluate_train(segmentation_module, loader, cfg, gpu_id, result_queue, fovea
                                 max_class_scores_tmp_2_1, _ = torch.max(scores_tmp_2[1], dim=1)
                                 # 2,B,W,H, B=1
                                 max_class_scores_tmp_2 = torch.cat([max_class_scores_tmp_2_0.unsqueeze(0), max_class_scores_tmp_2_1.unsqueeze(0)])
-                                # get patch idx of max(max(score))
-                                # patch_idx_by_score.shape = B,W,H; B=1
                                 _, patch_idx_by_score = torch.max(max_class_scores_tmp_2, dim=0)
                                 scores_tmp_2_patch_idx = patch_idx_by_score.unsqueeze(1).unsqueeze(0).expand(scores_tmp_2.shape)
                                 scores_tmp_2[0] = scores_tmp_2.gather(0, scores_tmp_2_patch_idx)[0]
@@ -665,8 +624,6 @@ def evaluate_train(segmentation_module, loader, cfg, gpu_id, result_queue, fovea
                                     # C,W,H
                                     foveated_expection_temp_pad = torch.zeros(foveated_expection_temp.shape[3],foveated_expection_temp.shape[1],foveated_expection_temp.shape[2])
                                     foveated_expection_temp_pad = F.pad(foveated_expection_temp_pad, (p_w,p_w,p_h,p_h))
-                                    # print('foveated_expection_temp_pad:', foveated_expection_temp_pad.shape)
-                                    # print('cx_p, cy_p, patch_size:', cx_p, cy_p, patch_size)
                                     # W,H,C
                                     foveated_expection_temp_pad = foveated_expection_temp_pad.permute(1,2,0)
                                     foveated_expection_temp_pad[cx_p:cx_p+patch_size, cy_p:cy_p+patch_size, :] = weighed_patch
@@ -683,9 +640,6 @@ def evaluate_train(segmentation_module, loader, cfg, gpu_id, result_queue, fovea
                                         foveated_expection_temp[1] = foveated_expection_temp_pad_y[p_y_h:foveated_expection_temp_pad_y.shape[0]-p_y_h, p_y_w:foveated_expection_temp_pad_y.shape[1]-p_y_w, :]
                                         print('max: ', torch.max(foveated_expection_temp_temp))
                                         print('min: ', torch.min(foveated_expection_temp_temp))
-                                        # if torch.min(foveated_expection_temp_temp) == 0:
-                                        #     print(foveated_expection_temp_temp)
-                                        #     raise Exception('weighted patch may wrong')
                                     if cfg.VAL.hard_max_fov:
                                         # W,H
                                         foveated_expection_weight_pad = torch.zeros(foveated_expection_temp_pad.shape[0:-1])
@@ -713,30 +667,10 @@ def evaluate_train(segmentation_module, loader, cfg, gpu_id, result_queue, fovea
                                 if cfg.VAL.hard_max_fov:
                                     foveated_expection_weight[1] = torch.zeros(foveated_expection_weight[0].shape)
 
-
-                                # else:
-                                #     for s in range(len(X_patches_cords)):
-                                #         cx, cy, patch_size, p = X_patches_cords[s]
-                                #         # X_patches_unnorm: b,d,c,w,h
-                                #         X_patch = b_imresize(X_patches_unnorm[:,s,:,:,:], (patch_size, patch_size), interp='nearest')
-                                #         # X_patch: b,c,w,h
-                                #         # NOTE: current version only appliable for batch size = 1
-                                #         X_patch = X_patch[0]
-                                #         # c,w,h
-                                #         # TODO: check is this right??? should it be F_Xlr[:,s,xi,yi] NOT 1-F_Xlr[:,s,xi,yi] ?
-                                #         weighed_patch = (1-F_Xlr[:,s,xi,yi]).unsqueeze(-1).unsqueeze(-1).expand(*X_patch.size())*X_patch
-                                #         # w,h,c
-                                #         weighed_patch = weighed_patch.permute(1,2,0).cpu()
-                                #         foveated_expection[cx:cx+patch_size, cy:cy+patch_size, :] = foveated_expection[cx:cx+patch_size, cy:cy+patch_size, :] + weighed_patch
-                                #         overlap_count[cx:cx+patch_size, cy:cy+patch_size, :] += torch.ones_like(weighed_patch)
-
                         # print('{}/{} foveate points, xi={}, yi={}'.format(xi*X_lr.shape[3]+yi, X_lr.shape[2]*X_lr.shape[3], xi, yi))
                         pbar_X_lr.update(1)
                     if cfg.VAL.max_score:
                         scores_tmp = scores_tmp_2[0]
-                    # print('F_Xlr: ', F_Xlr.shape)
-                    # print(F_Xlr)
-                # non foveation mode
                 else:
                     # forward pass
                     scores_tmp = segmentation_module(feed_dict, segSize=segSize)
@@ -769,25 +703,13 @@ def evaluate_train(segmentation_module, loader, cfg, gpu_id, result_queue, fovea
             else:
                 confusion += confusion_matrix(seg_label, pred, seg_label.shape, cfg.DATASET.num_class)
         if cfg.MODEL.foveation:
-            # b,d,w,h
-            # print(F_Xlr.shape)
-            # F_Xlr = (F_Xlr-torch.min(F_Xlr))/(torch.max(F_Xlr)-torch.min(F_Xlr))
-            # print(F_Xlr.shape)
-            # for idx in range(F_Xlr.shape[1]):
-            #     F_Xlr[:,idx,:,:] = F_Xlr[:,idx,:,:]*(255//F_Xlr.shape[1]*idx)
-            # print(F_Xlr.shape)
 
             patch_bank_F_Xlr = torch.tensor(patch_bank).to(F_Xlr.device)
             F_Xlr = patch_bank_F_Xlr.unsqueeze(-1).unsqueeze(-1).float()*(F_Xlr.squeeze(0)).float()
             F_Xlr = as_numpy(F_Xlr.cpu())
-            # F_Xlr = as_numpy(F_Xlr.squeeze(0).cpu())
-            # print('F_Xlr_np', F_Xlr.shape)
             # t,b,d,w,h
             F_Xlr = np.sum(F_Xlr,axis=0)
-            # print('F_Xlr_sum', F_Xlr.shape)
-            # print(F_Xlr)
             F_Xlr = np.expand_dims(F_Xlr,axis=0)
-            # print('F_Xlr_expand_dims', F_Xlr.shape)
             if cfg.VAL.all_F_Xlr_time:
                 F_Xlr_info = (F_Xlr, batch_data['info'].split('/')[-1].split('.')[0])
                 result_queue.put_nowait((acc, pix, intersection, union, confusion, area_lab, F_Xlr_info))
@@ -809,9 +731,6 @@ def evaluate_train(segmentation_module, loader, cfg, gpu_id, result_queue, fovea
                 #     foveated_expection = foveated_expection / overlap_count
                 foveated_expection = as_numpy(foveated_expection.cpu())
                 # b,d,w,h
-                # bright -> fine high resolution, dark -> coarse low resolution
-                # normalize F_Xlr
-                # np.savetxt(os.path.join(cfg.DIR, "result_{}".format(cfg.VAL.checkpoint), "un_scaled_F_Xlr.txt"), as_numpy(F_Xlr.cpu()))
                 F_Xlr = (F_Xlr-torch.min(F_Xlr))/(torch.max(F_Xlr)-torch.min(F_Xlr))
                 F_Xlr = b_imresize((1-F_Xlr), (segSize[0], segSize[1]), interp='nearest')
                 # b,d,w,h -> d,w,h -> w,h,d
@@ -861,16 +780,6 @@ def worker_train(cfg, gpu_id, start_idx, end_idx, result_queue):
         weights=cfg.MODEL.weights_foveater,
         cfg=cfg)
 
-    # crit = nn.NLLLoss(ignore_index=-1)
-    # Gleason2019:
-    # NOTE: DON'T use ignore_index to omit class 3 which will lead final layer size missmatch, use weight=0 for class 3
-    # ignore_label = -1 # because we added 1, so the original gs2 class labelled as 3
-    # total_lab_weight [2.0343, 15.8754, inf, 5.2565, 4.0280, 561.1551, 194.2561], inf will be omit by pass 0 instead of inf in the Tensor
-    # TODO: weight now calculated based on 67 STAPLE fused gt subset, full
-    # class_weights = torch.cuda.FloatTensor([2.0343, 15.8754, 0, 5.2565, 4.0280, 561.1551, 194.2561])
-    # omit background and set upper cap as 10
-    # class_weights = torch.cuda.FloatTensor([1, 1, 0, 1, 1, 0, 0])
-    # crit = nn.CrossEntropyLoss(weight=class_weights, ignore_index=ignore_label)
     if 'CITYSCAPES' in cfg.DATASET.root_dataset:
         if cfg.TRAIN.loss_fun == 'NLLLoss':
             crit = nn.NLLLoss(ignore_index=19)
@@ -896,31 +805,16 @@ def worker_train(cfg, gpu_id, start_idx, end_idx, result_queue):
     if cfg.MODEL.foveation:
         foveation_module = FovSegmentationModule(net_foveater, cfg)
 
-    # segmentation_module.cuda()
-    # if cfg.MODEL.foveation:
-    #     foveation_module.cuda()
-
-    # if not os.path.exists(os.path.join(cfg.DIR, 'network_summary.txt')):
-    # f = open(os.path.join(cfg.DIR, 'network_summary.txt'), 'w')
-    # if cfg.MODEL.foveation:
-    #     print(foveation_module, file = f)
-    # print(segmentation_module, file = f)
 
     if cfg.MODEL.foveation:
         foveation_module = FovSegmentationModule(net_foveater, cfg)
-    #     total_fov = sum([param.nelement() for param in foveation_module.parameters()])
-    #     print('Number of FoveationModule params: %.2fM \n' % (total_fov / 1e6))
-    #
-    # total = sum([param.nelement() for param in segmentation_module.parameters()])
-    # f.write('Number of SegmentationModule params: %.2fM \n' % (total / 1e6))
 
     # Main loop
     if cfg.MODEL.foveation:
         evaluate(segmentation_module, loader_val, cfg, gpu_id, result_queue, foveation_module)
     else:
         evaluate(segmentation_module, loader_val, cfg, gpu_id, result_queue)
-    # f.write('Max memory allocated: %.2fM' % (torch.cuda.max_memory_allocated() / 1e6))
-    # f.close()
+
 
 def worker_deform(cfg, gpu_id, start_idx, end_idx, result_queue):
     torch.cuda.set_device(gpu_id)

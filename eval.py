@@ -306,14 +306,6 @@ def evaluate(segmentation_module, loader, cfg, gpu, foveation_module=None, write
         dice_deformed = (2 * intersection_meter_deformed.sum) / (union_meter_deformed.sum + intersection_meter_deformed.sum + 1e-10)
         if cfg.VAL.y_sampled_reverse:
             dice_y_reverse = (2 * intersection_meter_y_reverse.sum) / (union_meter_y_reverse.sum + intersection_meter_y_reverse.sum + 1e-10)
-    # for i, _iou in enumerate(iou):
-    #     print('class [{}], IoU: {:.4f}'.format(i, _iou))
-    # print('eval_y_distribution_meter value: \n', eval_y_distribution_meter.value())
-    # print('eval_y_distribution_meter count: \n', eval_y_distribution_meter.count)
-    # print('eval_y_distribution_meter average: \n', eval_y_distribution_meter.average()*100.0)
-    # print('eval_y_sampled_distribution_meter value: \n', eval_y_sampled_distribution_meter.value())
-    # print('eval_y_sampled_distribution_meter count: \n', eval_y_sampled_distribution_meter.count)
-    # print('eval_y_sampled_distribution_meter average: \n', eval_y_sampled_distribution_meter.average()*100.0)
     writer.add_histogram('Eval Label Original distribution', eval_y_distribution_meter.average()*100.0, count)
     writer.add_histogram('Eval Deformed Label distribution', eval_y_sampled_distribution_meter.average()*100.0, count)
     writer.add_histogram('Eval Deformed Label Distribution - Label Original Distribution', eval_y_sampled_distribution_meter.average()*100.0 - eval_y_distribution_meter.average()*100.0, count)
@@ -630,16 +622,6 @@ def main(cfg, gpu):
         weights=cfg.MODEL.weights_decoder,
         use_softmax=True)
 
-    # crit = nn.NLLLoss(ignore_index=-1)
-    # Gleason2019:
-    # NOTE: DON'T use ignore_index to omit class 3 which will lead final layer size missmatch, use weight=0 for class 3
-    # ignore_label = -1 # because we added 1, so the original gs2 class labelled as 3
-    # total_lab_weight [2.0343, 15.8754, inf, 5.2565, 4.0280, 561.1551, 194.2561], inf will be omit by pass 0 instead of inf in the Tensor
-    # TODO: weight now calculated based on 67 STAPLE fused gt subset, full
-    # class_weights = torch.cuda.FloatTensor([2.0343, 15.8754, 0, 5.2565, 4.0280, 561.1551, 194.2561])
-    # omit background and set upper cap as 10
-    # class_weights = torch.cuda.FloatTensor([1, 1, 0, 1, 1, 0, 0])
-    # crit = nn.CrossEntropyLoss(weight=class_weights, ignore_index=ignore_label)
     if 'CITYSCAPES' in cfg.DATASET.root_dataset:
         if cfg.TRAIN.loss_fun == 'NLLLoss':
             crit = nn.NLLLoss(ignore_index=19)

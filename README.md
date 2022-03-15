@@ -1,11 +1,19 @@
-# Deformation for Segmentation in PyTorch
+# Learning to Downsample for Segmentation of Ultra-High Resolution Images in PyTorch
 
-This is a PyTorch implementation of Learning to Downsample for Segmentation of Ultra-High Resolution Images.
+[![License](http://creativecommons.org/licenses/by-nc-sa/4.0/)](LICENSE.md)
+
+This is a PyTorch implementation of [Learning to Downsample for Segmentation of Ultra-High Resolution Images](https://lxasqjc.github.io/learn-downsample.github.io/) which published at [ICLR 2022](https://openreview.net/forum?id=HndgQudNb91).
+
+## Updates
+- ICLR 2022 talk available [HERE](https://recorder-v3.slideslive.com/?share=63834&s=2a9de36c-8627-40cd-9fa5-ef8accc61cca)
+- More details/examples/video demos available [HERE](https://lxasqjc.github.io/learn-downsample.github.io/)
+
 
 ### Table of Contents
 1. [Environment-Setup](#environment-Setup)
 1. [Data-preparation](#data-preparation)
 1. [Reproduce](#reproduce)
+1. [Citation](#citation)
 
 ## Environment-Setup
 
@@ -99,4 +107,16 @@ bash quick_start_bash/eval/deepglob_300_300_ours.sh
 bash quick_start_bash/eval/deepglob_300_300_uniform.sh
 bash quick_start_bash/eval/pcahisto_80_800_ours.sh
 bash quick_start_bash/eval/pcahisto_80_800_uniform.sh
+```
+
+## Citation
+If you use this code for your research, please cite our paper:
+
+```
+@article{jin2021learning,
+  title={Learning to Downsample for Segmentation of Ultra-High Resolution Images},
+  author={Jin, Chen and Tanno, Ryutaro and Mertzanidou, Thomy and Panagiotaki, Eleftheria and Alexander, Daniel C},
+  journal={arXiv preprint arXiv:2109.11071},
+  year={2021}
+}
 ```
