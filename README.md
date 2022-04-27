@@ -73,7 +73,7 @@ full configuration bash provided to reproduced paper results, suitable for large
 ### Training
 Train a model by selecting the GPUs (```$GPUS```) and configuration file (```$CFG```) to use. During training, last checkpoints by default are saved in folder ```ckpt```.
 ```bash
-python3 train_fove.py --gpus $GPUS --cfg $CFG
+python3 train_deform.py --gpus $GPUS --cfg $CFG
 ```
 - To choose which gpus to use, you can either do ```--gpus 0-7```, or ```--gpus 0,2,4,6```.
 
