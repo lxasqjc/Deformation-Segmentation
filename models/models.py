@@ -6,7 +6,7 @@ from torch.distributions.categorical import Categorical
 import torchvision
 import torchvision.utils as vutils
 import torchsnooper
-from . import resnet, resnext, mobilenet, hrnet, u_net, u_net_nonsyn, attention_u_net, attention_u_net_deep, attention_u_net_deep_ds4x, hrnetv2_nonsyn, hrnetv2_nodownsp, hrnetv2_nodownsp_nonsyn, hrnetv2_16x_nonsyn
+from . import resnet, resnext, mobilenet, hrnetv2_nodownsp
 from lib.nn import SynchronizedBatchNorm2d
 from dataset import imresize, b_imresize, patch_loader
 from builtins import any as b_any
