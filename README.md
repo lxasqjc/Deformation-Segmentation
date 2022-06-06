@@ -16,26 +16,14 @@ This is a PyTorch implementation of [Learning to Downsample for Segmentation of 
 
 ## Environment-Setup
 
-### Special dependencies for interp2d
-
-```
-pip install Cython
-cd spatial
-python setup.py build_ext --inplace
-```
-
 ### Install dependencies
 Install dependencies with one of the following options:
-* Method 1: Pip installation:
-```
-python -m pip install -r requirements.txt
-```
-* Method 2: Conda installation with miniconda3 PATH ```/home/miniconda3/```:
+Conda installation with miniconda3 PATH ```/home/miniconda3/```:
 ```
 conda env create -f deform_seg_env.yml
 conda activate deform_seg_env
 ```
-This code was tested with python 3.7, pytorch 1.2 and CUDA 11.0
+Above environment is built with conda version: 4.7.11
 
 ## Data preparation
 1. Download the [Cityscapes](https://www.cityscapes-dataset.com/), [DeepGlobe](https://competitions.codalab.org/competitions/18468) and [PCa-histo](to-be-released) datasets.
