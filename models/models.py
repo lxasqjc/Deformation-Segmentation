@@ -24,7 +24,7 @@ from scipy import ndimage
 import scipy.interpolate
 import cv2
 import torchvision.models as models
-from interp2d import Interp2D
+# from interp2d import Interp2D
 from saliency_network import saliency_network_resnet18, saliency_network_resnet18_nonsyn, saliency_network_resnet10_nonsyn, fov_simple, fov_simple_nonsyn, saliency_network_resnet18_stride1
 
 # from pypapi import events, papi_high as high
