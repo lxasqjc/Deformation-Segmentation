@@ -3,7 +3,7 @@
 This is a PyTorch implementation of [Learning to Downsample for Segmentation of Ultra-High Resolution Images](https://lxasqjc.github.io/learn-downsample.github.io/) which published at [ICLR 2022](https://openreview.net/forum?id=HndgQudNb91).
 
 ## Updates
-- I commit for a more straightforward set-up instruction (in Colab), please keep an eye on updates of this repo :)
+- Apology for the long deployed code cleaning, which is now done! Please let me know if you would like further clarification of any part :)
 - ICLR 2022 talk available [HERE](https://recorder-v3.slideslive.com/?share=63834&s=2a9de36c-8627-40cd-9fa5-ef8accc61cca)
 - For more details/examples/video demos visit our project page [HERE](https://lxasqjc.github.io/learn-downsample.github.io/)
 
