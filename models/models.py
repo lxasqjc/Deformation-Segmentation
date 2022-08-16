@@ -24,7 +24,7 @@ import scipy.interpolate
 import cv2
 import torchvision.models as models
 from saliency_network import saliency_network_resnet18, fov_simple, saliency_network_resnet18_stride1
-import .model_utils
+from models.model_utils import Resnet, ResnetDilated, MobileNetV2Dilated, C1DeepSup, C1, PPM, PPMDeepsup, UPerNet
 
 BatchNorm2d = SynchronizedBatchNorm2d
 
@@ -571,7 +571,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
                 loss_deepsup = self.crit(pred_deepsup, feed_dict['seg_label'])
                 loss = loss + loss_deepsup * self.deep_sup_scale
             if self.cfg.TRAIN.deform_joint_loss:
-                print('seg loss: {}, scaled edge_loss: {}\n'.format(loss, edge_loss))
+                # print('seg loss: {}, scaled edge_loss: {}\n'.format(loss, edge_loss))
                 loss = loss + edge_loss
 
             if self.cfg.MODEL.loss_at_high_res:
