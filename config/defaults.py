@@ -60,22 +60,16 @@ _C.MODEL.weights_net_compress = ""
 _C.MODEL.fc_dim = 2048
 # option to disable track_running_stats
 _C.MODEL.track_running_stats = True
-_C.MODEL.fov_deform = False
-_C.MODEL.naive_upsample = True
 _C.MODEL.deconv = False
 _C.MODEL.rev_deform_opt = 51 # 51-fill missing by tensor (diffrienable) based triangular filling;
 _C.MODEL.rev_deform_interp = 'tri' # different reverse deformation solutions
 _C.MODEL.loss_at_high_res = False # choose whether calculate loss after reverse deformation at high resolution domain
-_C.MODEL.img_gradient = False
 _C.MODEL.saliency_net = 'fovsimple'
 # set uniform_sample = 'Saliency' to sample/rev_sample based on uniform saliency
 # set uniform_sample = 'BI' to sample/rev_sample by nn.upsample
 _C.MODEL.uniform_sample = ''
 # optional adjust saliency output size, default same size as saliency_input_size
 _C.MODEL.saliency_output_size_short = 0
-# fixed gaussian saliency for debug purpose
-# 1: central gaussian, 2: two eye gaussian
-_C.MODEL.fix_saliency = 0
 # optional gaussian kernel radius (gaussian kernel size = 2*radius+1)
 _C.MODEL.gaussian_radius = 30
 # optional change gaussian aspect ratio
@@ -173,8 +167,6 @@ _C.TRAIN.fix_deform_start_epoch = 2000
 _C.TRAIN.fix_deform_end_epoch = 2001
 _C.TRAIN.smooth_deform_2nd_start = 2001
 _C.TRAIN.smooth_deform_2nd_end = 2001
-
-_C.TRAIN.separate_optimise_deformation = False
 _C.TRAIN.opt_deform_LabelEdge = False
 # _C.TRAIN.opt_deform_LabelEdge_sepTrainPre = 999
 _C.TRAIN.fix_seg_start_epoch = 2000
@@ -184,7 +176,6 @@ _C.TRAIN.opt_deform_LabelEdge_softmax = True
 _C.TRAIN.opt_deform_LabelEdge_norm = True
 _C.TRAIN.deform_joint_loss = False
 _C.TRAIN.edge_loss_scale = 100.0
-_C.TRAIN.rescale_regressed_xs = False
 _C.TRAIN.fixed_edge_loss_scale = -1.0
 _C.TRAIN.edge_loss_pow = 0.9
 _C.TRAIN.edge_loss_scale_min = 0.0
@@ -192,7 +183,7 @@ _C.TRAIN.stage_adjust_edge_loss = 1.0
 _C.TRAIN.adjust_edge_loss_start_epoch = 2000
 _C.TRAIN.adjust_edge_loss_end_epoch = 2001
 _C.TRAIN.def_saliency_pad_mode = 'replication'
-_C.TRAIN.dynamic_task_input = (1,1)
+_C.TRAIN.dynamic_task_input = (1,1) # dealing with varying input image size such as pcahisto dataset
 _C.TRAIN.dynamic_saliency_relative_size = 1.0
 _C.TRAIN.deform_zero_bound = False
 _C.TRAIN.deform_zero_bound_factor = 1

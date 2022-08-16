@@ -14,10 +14,8 @@ MODEL:
   arch_encoder: "hrnetv2_nodownsp"
   arch_decoder: "c1"
   fc_dim: 720
-  fov_deform: True
   in_dim: 3
   gaussian_radius: 15
-  naive_upsample: False
   gt_gradient_intrinsic_only: False
   rev_deform_interp: 'nearest'
 

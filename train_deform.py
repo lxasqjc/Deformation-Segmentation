@@ -20,10 +20,10 @@ from scipy.stats import entropy
 # Our libs
 from config import cfg
 from dataset import TrainDataset #, ValDataset
-from models import ModelBuilder, SegmentationModule, DeformSegmentationModule
+from models import ModelBuilder, DeformSegmentationModule
 from utils import AverageMeter, parse_devices, setup_logger
 from lib.nn import UserScatteredDataParallel, user_scattered_collate, patch_replication_callback
-from eval import eval_during_train_deform, eval_during_train
+from eval import eval_during_train_deform
 from criterion import OhemCrossEntropy, DiceCoeff, FocalLoss
 from pytorch_toolbelt.losses.dice import DiceLoss
 
@@ -61,46 +61,24 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
 
         # adjust learning rate
         cur_iter = i + (epoch - 1) * cfg.TRAIN.epoch_iters
-        if cfg.MODEL.fov_deform:
-            adjust_learning_rate(optimizers, cur_iter, cfg, epoch=epoch)
-            if cfg.TRAIN.stage_adjust_edge_loss != 1.0 and epoch >= cfg.TRAIN.adjust_edge_loss_start_epoch and epoch <= cfg.TRAIN.adjust_edge_loss_end_epoch:
-                cfg.TRAIN.edge_loss_scale = cfg.TRAIN.stage_adjust_edge_loss
-                print('stage adjusted edge_loss_scale: ', cfg.TRAIN.edge_loss_scale)
-            elif cfg.TRAIN.fixed_edge_loss_scale > 0.0:
-                adjust_edge_loss_scale(cur_iter, cfg)
-        else:
-            adjust_learning_rate(optimizers, cur_iter, cfg)
+        adjust_learning_rate(optimizers, cur_iter, cfg, epoch=epoch)
+        if cfg.TRAIN.stage_adjust_edge_loss != 1.0 and epoch >= cfg.TRAIN.adjust_edge_loss_start_epoch and epoch <= cfg.TRAIN.adjust_edge_loss_end_epoch:
+            cfg.TRAIN.edge_loss_scale = cfg.TRAIN.stage_adjust_edge_loss
+            print('stage adjusted edge_loss_scale: ', cfg.TRAIN.edge_loss_scale)
+        elif cfg.TRAIN.fixed_edge_loss_scale > 0.0:
+            adjust_edge_loss_scale(cur_iter, cfg)
 
         print_grad = None
-        if cfg.MODEL.fov_deform:
-            if single_gpu_mode:
-                loss, acc, _ = segmentation_module(batch_data[0], writer=writer, count=cur_iter, epoch=epoch)
-            else:
-                if cfg.TRAIN.opt_deform_LabelEdge and epoch >= cfg.TRAIN.fix_seg_start_epoch and epoch <= cfg.TRAIN.fix_seg_end_epoch:
-                    loss, acc, edge_loss = segmentation_module(batch_data)
-                elif cfg.TRAIN.separate_optimise_deformation and epoch >= cfg.TRAIN.fix_seg_start_epoch and epoch <= cfg.TRAIN.fix_seg_end_epoch:
-                    loss, acc, save_print_grad = segmentation_module(batch_data)
-                    if cur_iter > 0:
-                        if save_print_grad[0]['saliency_grad'] is not None:
-                            writer.add_histogram('Saliency gradient histogram', save_print_grad[0]['saliency_grad'], cur_iter)
-                        if save_print_grad[0]['check1_grad'] is not None:
-                            writer.add_histogram('Check1 gradient histogram', save_print_grad[0]['check1_grad'], cur_iter)
-                        if save_print_grad[0]['check2_grad'] is not None:
-                            writer.add_histogram('Check2 gradient histogram', save_print_grad[0]['check2_grad'], cur_iter)
-                    if epoch == cfg.TRAIN.fix_seg_end_epoch:
-                        cfg.TRAIN.opt_deform_LabelEdge = False
-                        cfg.TRAIN.separate_optimise_deformation = False
-                        cfg.MODEL.rev_deform_interp = 'nearest'
-                        cfg.VAL.y_sampled_reverse = True
-                elif cfg.TRAIN.deform_joint_loss:
-                    loss, acc, edge_loss = segmentation_module(batch_data)
-                else:
-                    loss, acc = segmentation_module(batch_data)
+        if single_gpu_mode:
+            loss, acc, _ = segmentation_module(batch_data[0], writer=writer, count=cur_iter, epoch=epoch)
         else:
-            if single_gpu_mode:
-                loss, acc = segmentation_module(batch_data[0], writer=writer, count=cur_iter)
+            if cfg.TRAIN.opt_deform_LabelEdge and epoch >= cfg.TRAIN.fix_seg_start_epoch and epoch <= cfg.TRAIN.fix_seg_end_epoch:
+                loss, acc, edge_loss = segmentation_module(batch_data)
+            elif cfg.TRAIN.deform_joint_loss:
+                loss, acc, edge_loss = segmentation_module(batch_data)
             else:
                 loss, acc = segmentation_module(batch_data)
+
         if loss is None and acc is None:
             print('A-skip iter: {}\n'.format(i))
             continue
@@ -110,19 +88,14 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
         # Backward
         if not (cfg.MODEL.gt_gradient and cfg.MODEL.gt_gradient_intrinsic_only):
             loss_step.backward()
-
-            if cfg.MODEL.fov_deform:
-                for optimizer in optimizers:
-                    if cfg.TRAIN.fix_deform_aft_pretrain and epoch >= cfg.TRAIN.fix_deform_start_epoch and epoch <= cfg.TRAIN.fix_deform_end_epoch:
-                        if optimizer.param_groups[0]['zoom']==False: # update segmentation module only
-                            optimizer.step()
-                    elif cfg.TRAIN.opt_deform_LabelEdge and epoch >= cfg.TRAIN.fix_seg_start_epoch and epoch <= cfg.TRAIN.fix_seg_end_epoch:
-                        if optimizer.param_groups[0]['zoom']==True: # update deformation module only
-                            optimizer.step()
-                    else:
+            for optimizer in optimizers:
+                if cfg.TRAIN.fix_deform_aft_pretrain and epoch >= cfg.TRAIN.fix_deform_start_epoch and epoch <= cfg.TRAIN.fix_deform_end_epoch:
+                    if optimizer.param_groups[0]['zoom']==False: # update segmentation module only
                         optimizer.step()
-            else:
-                for optimizer in optimizers:
+                elif cfg.TRAIN.opt_deform_LabelEdge and epoch >= cfg.TRAIN.fix_seg_start_epoch and epoch <= cfg.TRAIN.fix_seg_end_epoch:
+                    if optimizer.param_groups[0]['zoom']==True: # update deformation module only
+                        optimizer.step()
+                else:
                     optimizer.step()
 
         # update average loss and acc
@@ -167,19 +140,15 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
 
 def checkpoint(nets, cfg, epoch):
     print('Saving checkpoints...')
-    if cfg.MODEL.fov_deform:
-        (net_encoder, net_decoder, crit, net_saliency, net_compress) = nets
-        dict_saliency = net_saliency.state_dict()
-        torch.save(
-            dict_saliency,
-            '{}/saliency_epoch_{}.pth'.format(cfg.DIR, epoch))
-        dict_compress = net_compress.state_dict()
-        torch.save(
-            dict_compress,
-            '{}/compress_epoch_{}.pth'.format(cfg.DIR, epoch))
-    else:
-        (net_encoder, net_decoder, crit) = nets
-
+    (net_encoder, net_decoder, crit, net_saliency, net_compress) = nets
+    dict_saliency = net_saliency.state_dict()
+    torch.save(
+        dict_saliency,
+        '{}/saliency_epoch_{}.pth'.format(cfg.DIR, epoch))
+    dict_compress = net_compress.state_dict()
+    torch.save(
+        dict_compress,
+        '{}/compress_epoch_{}.pth'.format(cfg.DIR, epoch))
     dict_encoder = net_encoder.state_dict()
     dict_decoder = net_decoder.state_dict()
     torch.save(
@@ -193,18 +162,16 @@ def checkpoint(nets, cfg, epoch):
 
 def checkpoint_last(nets, cfg, epoch):
     print('Saving checkpoints...')
-    if cfg.MODEL.fov_deform:
-        (net_encoder, net_decoder, crit, net_saliency, net_compress) = nets
-        dict_saliency = net_saliency.state_dict()
-        torch.save(
-            dict_saliency,
-            '{}/saliency_epoch_last.pth'.format(cfg.DIR))
-        dict_compress = net_compress.state_dict()
-        torch.save(
-            dict_compress,
-            '{}/compress_epoch_last.pth'.format(cfg.DIR))
-    else:
-        (net_encoder, net_decoder, crit) = nets
+    (net_encoder, net_decoder, crit, net_saliency, net_compress) = nets
+    dict_saliency = net_saliency.state_dict()
+    torch.save(
+        dict_saliency,
+        '{}/saliency_epoch_last.pth'.format(cfg.DIR))
+    dict_compress = net_compress.state_dict()
+    torch.save(
+        dict_compress,
+        '{}/compress_epoch_last.pth'.format(cfg.DIR))
+
 
     dict_encoder = net_encoder.state_dict()
     dict_decoder = net_decoder.state_dict()
@@ -274,65 +241,35 @@ def group_weight(module):
 
 
 def create_optimizers(nets, cfg):
-    if cfg.MODEL.fov_deform:
-        (net_encoder, net_decoder, crit, net_saliency, net_compress) = nets
-    else:
-        (net_encoder, net_decoder, crit) = nets
+    (net_encoder, net_decoder, crit, net_saliency, net_compress) = nets
 
     if cfg.TRAIN.optim.lower() == 'sgd':
-        if cfg.MODEL.fov_deform:
-            optimizer = torch.optim.SGD([
-                    {'params': net_encoder.parameters(),'lr_mult':cfg.TRAIN.lr_mult_encoder,'zoom':False},
-                    {'params': net_decoder.parameters(),'lr_mult':cfg.TRAIN.lr_mult_decoder,'zoom':False},
-                    {'params': net_saliency.parameters(),'lr_mult':cfg.TRAIN.lr_mult_saliency,'zoom':True},
-                    {'params': net_compress.parameters(),'lr_mult':cfg.TRAIN.lr_mult_compress,'zoom':True}
-                    ],lr =cfg.TRAIN.lr_encoder,momentum=cfg.TRAIN.beta1,weight_decay=cfg.TRAIN.weight_decay)
-        else:
-            optimizer_encoder = torch.optim.SGD(
-                group_weight(net_encoder),
-                lr=cfg.TRAIN.lr_encoder,
-                momentum=cfg.TRAIN.beta1,
-                weight_decay=cfg.TRAIN.weight_decay)
-            optimizer_decoder = torch.optim.SGD(
-                group_weight(net_decoder),
-                lr=cfg.TRAIN.lr_decoder,
-                momentum=cfg.TRAIN.beta1,
-                weight_decay=cfg.TRAIN.weight_decay)
+        optimizer = torch.optim.SGD([
+                {'params': net_encoder.parameters(),'lr_mult':cfg.TRAIN.lr_mult_encoder,'zoom':False},
+                {'params': net_decoder.parameters(),'lr_mult':cfg.TRAIN.lr_mult_decoder,'zoom':False},
+                {'params': net_saliency.parameters(),'lr_mult':cfg.TRAIN.lr_mult_saliency,'zoom':True},
+                {'params': net_compress.parameters(),'lr_mult':cfg.TRAIN.lr_mult_compress,'zoom':True}
+                ],lr =cfg.TRAIN.lr_encoder,momentum=cfg.TRAIN.beta1,weight_decay=cfg.TRAIN.weight_decay)
 
     elif cfg.TRAIN.optim.lower() == 'adam':
-        if cfg.MODEL.fov_deform:
-            optimizer_encoder = torch.optim.Adam(
-                [{'params': net_encoder.parameters(),'lr_mult':cfg.TRAIN.lr_mult_encoder,'zoom':False}],
-                lr=cfg.TRAIN.lr_encoder,
-                weight_decay=cfg.TRAIN.weight_decay)
-            optimizer_decoder = torch.optim.Adam(
-                [{'params': net_decoder.parameters(),'lr_mult':cfg.TRAIN.lr_mult_decoder,'zoom':False}],
-                lr=cfg.TRAIN.lr_encoder,
-                weight_decay=cfg.TRAIN.weight_decay)
-            optimizer_saliency = torch.optim.Adam(
-                [{'params': net_saliency.parameters(),'lr_mult':cfg.TRAIN.lr_mult_saliency,'zoom':True}],
-                lr=cfg.TRAIN.lr_encoder,
-                weight_decay=cfg.TRAIN.weight_decay)
-            optimizer_compress = torch.optim.Adam(
-                [{'params': net_compress.parameters(),'lr_mult':cfg.TRAIN.lr_mult_compress,'zoom':True}],
-                lr=cfg.TRAIN.lr_encoder,
-                weight_decay=cfg.TRAIN.weight_decay)
-        else:
-            optimizer_encoder = torch.optim.Adam(
-                group_weight(net_encoder),
-                lr=cfg.TRAIN.lr_encoder,
-                weight_decay=cfg.TRAIN.weight_decay)
-            optimizer_decoder = torch.optim.Adam(
-                group_weight(net_decoder),
-                lr=cfg.TRAIN.lr_decoder,
-                weight_decay=cfg.TRAIN.weight_decay)
+        optimizer_encoder = torch.optim.Adam(
+            [{'params': net_encoder.parameters(),'lr_mult':cfg.TRAIN.lr_mult_encoder,'zoom':False}],
+            lr=cfg.TRAIN.lr_encoder,
+            weight_decay=cfg.TRAIN.weight_decay)
+        optimizer_decoder = torch.optim.Adam(
+            [{'params': net_decoder.parameters(),'lr_mult':cfg.TRAIN.lr_mult_decoder,'zoom':False}],
+            lr=cfg.TRAIN.lr_encoder,
+            weight_decay=cfg.TRAIN.weight_decay)
+        optimizer_saliency = torch.optim.Adam(
+            [{'params': net_saliency.parameters(),'lr_mult':cfg.TRAIN.lr_mult_saliency,'zoom':True}],
+            lr=cfg.TRAIN.lr_encoder,
+            weight_decay=cfg.TRAIN.weight_decay)
+        optimizer_compress = torch.optim.Adam(
+            [{'params': net_compress.parameters(),'lr_mult':cfg.TRAIN.lr_mult_compress,'zoom':True}],
+            lr=cfg.TRAIN.lr_encoder,
+            weight_decay=cfg.TRAIN.weight_decay)
 
-
-    if cfg.MODEL.fov_deform:
-        # return (optimizer)
-        return (optimizer_encoder, optimizer_decoder, optimizer_saliency, optimizer_compress)
-    else:
-        return (optimizer_encoder, optimizer_decoder)
+    return (optimizer_encoder, optimizer_decoder, optimizer_saliency, optimizer_compress)
 
 
 def adjust_edge_loss_scale(cur_iter, cfg):
@@ -359,50 +296,40 @@ def adjust_learning_rate(optimizers, cur_iter, cfg, lr_mbs = False, f_max_iter=1
     if cfg.TRAIN.fov_scale_seg_only:
         scale_running_lr /= lr_scale
     cfg.TRAIN.running_lr_foveater = cfg.TRAIN.lr_foveater * scale_running_lr
-    if cfg.MODEL.fov_deform:
-        base_lr = 0.1
-        N_pretraining_base = cfg.TRAIN.deform_pretrain
+    base_lr = 0.1
+    N_pretraining_base = cfg.TRAIN.deform_pretrain
 
-        if cfg.TRAIN.scale_by_iter:
-            N_pretraining = N_pretraining_base*cfg.TRAIN.epoch_iters
-            lr_idx = cur_iter
-        else:
-            N_pretraining = N_pretraining_base
-            lr_idx = epoch
-
-        if cfg.TRAIN.deform_pretrain_bol:
-            lr_class = base_lr*0.1**(lr_idx//N_pretraining)
-            lr_zoom = base_lr*0.1**(lr_idx//N_pretraining)
-        elif lr_idx>=N_pretraining:
-            lr_class = base_lr*0.1**((lr_idx-N_pretraining)//N_pretraining)
-            lr_zoom = base_lr*0.1**(lr_idx//N_pretraining)
-        else:
-            lr_class = base_lr*0.1**(lr_idx//N_pretraining)
-            lr_zoom = base_lr*0.1**(lr_idx//N_pretraining)
-
-        if cfg.TRAIN.fix_deform_aft_pretrain and epoch >= cfg.TRAIN.fix_deform_start_epoch and epoch <= cfg.TRAIN.fix_deform_end_epoch:
-            lr_zoom = 0.0
-        if cfg.TRAIN.opt_deform_LabelEdge and epoch >= cfg.TRAIN.fix_seg_start_epoch and epoch <= cfg.TRAIN.fix_seg_end_epoch:
-            lr_class = 0.0
-
-        for optimizer in optimizers:
-            for param_group in optimizer.param_groups:
-                if param_group['zoom']==True:
-                    param_group['lr'] = param_group['lr_mult']*lr_zoom
-                    if cfg.TRAIN.opt_deform_LabelEdge:
-                        param_group['zoom'] *= cfg.TRAIN.opt_deform_LabelEdge_accrate
-                else:
-                    param_group['lr'] = param_group['lr_mult']*lr_class
+    if cfg.TRAIN.scale_by_iter:
+        N_pretraining = N_pretraining_base*cfg.TRAIN.epoch_iters
+        lr_idx = cur_iter
     else:
-        (optimizer_encoder, optimizer_decoder) = optimizers
-        for param_group in optimizer_encoder.param_groups:
-            param_group['lr'] = cfg.TRAIN.running_lr_encoder
-            if cfg.TRAIN.fov_scale_weight_decay != '':
-                param_group['weight_decay'] = cfg.TRAIN.weight_decay * wd_scale
-        for param_group in optimizer_decoder.param_groups:
-            param_group['lr'] = cfg.TRAIN.running_lr_decoder
-            if cfg.TRAIN.fov_scale_weight_decay != '':
-                param_group['weight_decay'] = cfg.TRAIN.weight_decay * wd_scale
+        N_pretraining = N_pretraining_base
+        lr_idx = epoch
+
+    if cfg.TRAIN.deform_pretrain_bol:
+        lr_class = base_lr*0.1**(lr_idx//N_pretraining)
+        lr_zoom = base_lr*0.1**(lr_idx//N_pretraining)
+    elif lr_idx>=N_pretraining:
+        lr_class = base_lr*0.1**((lr_idx-N_pretraining)//N_pretraining)
+        lr_zoom = base_lr*0.1**(lr_idx//N_pretraining)
+    else:
+        lr_class = base_lr*0.1**(lr_idx//N_pretraining)
+        lr_zoom = base_lr*0.1**(lr_idx//N_pretraining)
+
+    if cfg.TRAIN.fix_deform_aft_pretrain and epoch >= cfg.TRAIN.fix_deform_start_epoch and epoch <= cfg.TRAIN.fix_deform_end_epoch:
+        lr_zoom = 0.0
+    if cfg.TRAIN.opt_deform_LabelEdge and epoch >= cfg.TRAIN.fix_seg_start_epoch and epoch <= cfg.TRAIN.fix_seg_end_epoch:
+        lr_class = 0.0
+
+    for optimizer in optimizers:
+        for param_group in optimizer.param_groups:
+            if param_group['zoom']==True:
+                param_group['lr'] = param_group['lr_mult']*lr_zoom
+                if cfg.TRAIN.opt_deform_LabelEdge:
+                    param_group['zoom'] *= cfg.TRAIN.opt_deform_LabelEdge_accrate
+            else:
+                param_group['lr'] = param_group['lr_mult']*lr_class
+
 
 
 def main(cfg, gpus):
@@ -479,32 +406,22 @@ def main(cfg, gpus):
         fc_dim=cfg.MODEL.fc_dim,
         num_class=cfg.DATASET.num_class,
         weights=cfg.MODEL.weights_decoder)
-    if cfg.MODEL.fov_deform:
-        net_saliency = ModelBuilder.build_net_saliency(
-            cfg=cfg,
-            weights=cfg.MODEL.weights_net_saliency)
-        net_compress = ModelBuilder.build_net_compress(
-            cfg=cfg,
-            weights=cfg.MODEL.weights_net_compress)
-        if cfg.MODEL.arch_decoder.endswith('deepsup'):
-            segmentation_module = DeformSegmentationModule(net_encoder, net_decoder, net_saliency, net_compress, crit, cfg, deep_sup_scale=cfg.TRAIN.deep_sup_scale)
-        else:
-            segmentation_module = DeformSegmentationModule(net_encoder, net_decoder, net_saliency, net_compress, crit, cfg)
+    net_saliency = ModelBuilder.build_net_saliency(
+        cfg=cfg,
+        weights=cfg.MODEL.weights_net_saliency)
+    net_compress = ModelBuilder.build_net_compress(
+        cfg=cfg,
+        weights=cfg.MODEL.weights_net_compress)
+    if cfg.MODEL.arch_decoder.endswith('deepsup'):
+        segmentation_module = DeformSegmentationModule(net_encoder, net_decoder, net_saliency, net_compress, crit, cfg, deep_sup_scale=cfg.TRAIN.deep_sup_scale)
     else:
-        if cfg.MODEL.arch_decoder.endswith('deepsup'):
-            segmentation_module = SegmentationModule(net_encoder, net_decoder, crit, cfg, deep_sup_scale=cfg.TRAIN.deep_sup_scale)
-        else:
-            segmentation_module = SegmentationModule(net_encoder, net_decoder, crit, cfg)
-    total = sum([param.nelement() for param in segmentation_module.parameters()])
-    print('Number of SegmentationModule params: %.2fM \n' % (total / 1e6))
+        segmentation_module = DeformSegmentationModule(net_encoder, net_decoder, net_saliency, net_compress, crit, cfg)
+
 
 
 
     ###============== SET UP OPTIMIZERS ===========###
-    if cfg.MODEL.fov_deform:
-        nets = (net_encoder, net_decoder, crit, net_saliency, net_compress)
-    else:
-        nets = (net_encoder, net_decoder, crit)
+    nets = (net_encoder, net_decoder, crit, net_saliency, net_compress)
     optimizers = create_optimizers(nets, cfg)
 
     ###============== LOAD NETS INTO GPUs ===========###
@@ -611,19 +528,16 @@ def main(cfg, gpus):
 
         ## eval during train
         if (epoch+1) % cfg.TRAIN.eval_per_epoch == 0:
-            if not cfg.MODEL.fov_deform:
-                val_iou, val_acc = eval_during_train(cfg, gpus)
-            else:
-                if cfg.VAL.dice:
-                    if cfg.VAL.y_sampled_reverse:
-                        val_iou, val_dice, val_acc, val_iou_deformed, val_dice_deformed, val_acc_deformed, val_iou_y_reverse, val_dice_y_reverse, val_acc_y_reverse, relative_eval_y_ysample, ious = eval_during_train_deform(cfg, writer=writer, count=epoch+1)
-                    else:
-                        val_iou, val_dice, val_acc, val_iou_deformed, val_dice_deformed, val_acc_deformed, relative_eval_y_ysample, ious = eval_during_train_deform(cfg, writer=writer, count=epoch+1)
+            if cfg.VAL.dice:
+                if cfg.VAL.y_sampled_reverse:
+                    val_iou, val_dice, val_acc, val_iou_deformed, val_dice_deformed, val_acc_deformed, val_iou_y_reverse, val_dice_y_reverse, val_acc_y_reverse, relative_eval_y_ysample, ious = eval_during_train_deform(cfg, writer=writer, count=epoch+1)
                 else:
-                    if cfg.VAL.y_sampled_reverse:
-                        val_iou, val_acc, val_iou_deformed, val_acc_deformed, val_iou_y_reverse, val_acc_y_reverse, relative_eval_y_ysample, ious = eval_during_train_deform(cfg, writer=writer, count=epoch+1)
-                    else:
-                        val_iou, val_acc, val_iou_deformed, val_acc_deformed, relative_eval_y_ysample, ious = eval_during_train_deform(cfg, writer=writer, count=epoch+1)
+                    val_iou, val_dice, val_acc, val_iou_deformed, val_dice_deformed, val_acc_deformed, relative_eval_y_ysample, ious = eval_during_train_deform(cfg, writer=writer, count=epoch+1)
+            else:
+                if cfg.VAL.y_sampled_reverse:
+                    val_iou, val_acc, val_iou_deformed, val_acc_deformed, val_iou_y_reverse, val_acc_y_reverse, relative_eval_y_ysample, ious = eval_during_train_deform(cfg, writer=writer, count=epoch+1)
+                else:
+                    val_iou, val_acc, val_iou_deformed, val_acc_deformed, relative_eval_y_ysample, ious = eval_during_train_deform(cfg, writer=writer, count=epoch+1)
             # deform y-y_sampled
             for i in range(len(relative_eval_y_ysample)):
                 writer.add_scalars('Eval step Y_sampled-Y distribution', {'Class {}'.format(i): relative_eval_y_ysample[i]}, epoch+1)
@@ -786,10 +700,9 @@ if __name__ == '__main__':
             cfg.DIR, 'decoder_epoch_{}.pth'.format(cfg.TRAIN.start_epoch))
         assert os.path.exists(cfg.MODEL.weights_encoder) and \
             os.path.exists(cfg.MODEL.weights_decoder), "checkpoint does not exitst!"
-        if cfg.MODEL.fov_deform:
-            cfg.MODEL.weights_net_saliency = os.path.join(
-                cfg.DIR, 'saliency_epoch_{}.pth'.format(cfg.TRAIN.start_epoch))
-            assert os.path.exists(cfg.MODEL.weights_net_saliency), "checkpoint does not exitst!"
+        cfg.MODEL.weights_net_saliency = os.path.join(
+            cfg.DIR, 'saliency_epoch_{}.pth'.format(cfg.TRAIN.start_epoch))
+        assert os.path.exists(cfg.MODEL.weights_net_saliency), "checkpoint does not exitst!"
 
     # Parse gpu ids
     gpus = parse_devices(args.gpus)

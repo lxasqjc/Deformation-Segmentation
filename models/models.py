@@ -24,9 +24,9 @@ import scipy.interpolate
 import cv2
 import torchvision.models as models
 from saliency_network import saliency_network_resnet18, fov_simple, saliency_network_resnet18_stride1
+import .model_utils
 
 BatchNorm2d = SynchronizedBatchNorm2d
-BN_MOMENTUM = 0.1
 
 def makeGaussian(size, fwhm = 3, center=None):
     """ Make a square gaussian kernel.
@@ -170,6 +170,36 @@ def fillMissingValues_tensor(target_for_interp, copy=False, interp_mode='tri'):
             pass
     return target_for_interp
 
+def unorm(img):
+    if 'GLEASON' in self.cfg.DATASET.list_train:
+        mean=[0.748, 0.611, 0.823]
+        std=[0.146, 0.245, 0.119]
+    elif 'Digest' in self.cfg.DATASET.list_train:
+        mean=[0.816, 0.697, 0.792]
+        std=[0.160, 0.277, 0.198]
+    elif 'ADE' in self.cfg.DATASET.list_train:
+        mean=[0.485, 0.456, 0.406]
+        std=[0.229, 0.224, 0.225]
+    elif 'CITYSCAPE' in self.cfg.DATASET.list_train or 'Cityscape' in self.cfg.DATASET.list_train:
+        mean=[0.485, 0.456, 0.406]
+        std=[0.229, 0.224, 0.225]
+    elif 'histo' in self.cfg.DATASET.list_train:
+        mean=[0.8223, 0.7783, 0.7847]
+        std=[0.210, 0.216, 0.241]
+    elif 'DeepGlob' in self.cfg.DATASET.list_train:
+        mean=[0.282, 0.379, 0.408]
+        std=[0.089, 0.101, 0.127]
+    elif 'Face_single_example' in self.cfg.DATASET.root_dataset or 'Face_single_example' in self.cfg.DATASET.list_train:
+        mean=[0.282, 0.379, 0.408]
+        std=[0.089, 0.101, 0.127]
+    elif 'Histo' in self.cfg.DATASET.root_dataset or 'histomri' in self.cfg.DATASET.list_train or 'histomri' in self.cfg.DATASET.root_dataset:
+        mean=[0.8223, 0.7783, 0.7847]
+        std=[0.210, 0.216, 0.241]
+    else:
+        raise Exception('Unknown root for normalisation!')
+    for t, m, s in zip(img, mean, std):
+        t.mul_(s).add_(m)
+    return img
 
 class CompressNet(nn.Module):
     def __init__(self, cfg):
@@ -209,10 +239,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
         self.cfg = cfg
         self.deep_sup_scale = deep_sup_scale
         self.print_original_y = True
-        self.epoch_record = 0
-
         self.net_compress = net_compress
-
         if self.cfg.MODEL.saliency_output_size_short == 0:
             self.grid_size_x = cfg.TRAIN.saliency_input_size[0]
         else:
@@ -226,7 +253,6 @@ class DeformSegmentationModule(SegmentationModuleBase):
         self.padding_size_y = int(gaussian_ap * self.padding_size_x)
         self.global_size_x = self.grid_size_x+2*self.padding_size_x
         self.global_size_y = self.grid_size_y+2*self.padding_size_y
-
         self.input_size = cfg.TRAIN.saliency_input_size
         self.input_size_net = cfg.TRAIN.task_input_size
         self.input_size_net_eval = cfg.TRAIN.task_input_size_eval
@@ -248,16 +274,9 @@ class DeformSegmentationModule(SegmentationModuleBase):
                 for j in range(self.global_size_y):
                     self.P_basis[k,i,j] = k*(i-self.padding_size_x)/(self.grid_size_x-1.0)+(1.0-k)*(j-self.padding_size_y)/(self.grid_size_y-1.0)
 
-        if self.cfg.MODEL.img_gradient:
-            sobel_weight = torch.FloatTensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]])
-            self.sobel_filter = nn.Conv2d(1, 1, kernel_size=(3,3),bias=False)
-            self.sobel_filter.weight[0][0].data[:,:] = sobel_weight
-            self.compress_filter = nn.Conv2d(3,1,kernel_size=1,padding=0,stride=1)
-            self.compress_filter.weight.data = torch.tensor([0.2989, 0.5870, 0.1140]).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
-
         self.save_print_grad = [{'saliency_grad': 0.0, 'check1_grad': 0.0, 'check2_grad': 0.0} for _ in range(cfg.TRAIN.num_gpus)]
 
-    def re_initialise(self, cfg, this_size):
+    def re_initialise(self, cfg, this_size):# dealing with varying input image size such as pcahisto dataset
         this_size_short = min(this_size)
         this_size_long = max(this_size)
         scale_task_rate_1 = this_size_short // min(cfg.TRAIN.dynamic_task_input)
@@ -351,38 +370,6 @@ class DeformSegmentationModule(SegmentationModuleBase):
         else:
             return grid, grid_y
 
-    def unorm(img):
-        if 'GLEASON' in self.cfg.DATASET.list_train:
-            mean=[0.748, 0.611, 0.823]
-            std=[0.146, 0.245, 0.119]
-        elif 'Digest' in self.cfg.DATASET.list_train:
-            mean=[0.816, 0.697, 0.792]
-            std=[0.160, 0.277, 0.198]
-        elif 'ADE' in self.cfg.DATASET.list_train:
-            mean=[0.485, 0.456, 0.406]
-            std=[0.229, 0.224, 0.225]
-        elif 'CITYSCAPE' in self.cfg.DATASET.list_train or 'Cityscape' in self.cfg.DATASET.list_train:
-            mean=[0.485, 0.456, 0.406]
-            std=[0.229, 0.224, 0.225]
-        elif 'histo' in self.cfg.DATASET.list_train:
-            mean=[0.8223, 0.7783, 0.7847]
-            std=[0.210, 0.216, 0.241]
-        elif 'DeepGlob' in self.cfg.DATASET.list_train:
-            mean=[0.282, 0.379, 0.408]
-            std=[0.089, 0.101, 0.127]
-        elif 'Face_single_example' in self.cfg.DATASET.root_dataset or 'Face_single_example' in self.cfg.DATASET.list_train:
-            mean=[0.282, 0.379, 0.408]
-            std=[0.089, 0.101, 0.127]
-        elif 'Histo' in self.cfg.DATASET.root_dataset or 'histomri' in self.cfg.DATASET.list_train or 'histomri' in self.cfg.DATASET.root_dataset:
-            mean=[0.8223, 0.7783, 0.7847]
-            std=[0.210, 0.216, 0.241]
-        else:
-            raise Exception('Unknown root for normalisation!')
-        for t, m, s in zip(img, mean, std):
-            t.mul_(s).add_(m)
-            # The normalize code -> t.sub_(m).div_(s)
-        return img
-
     def ignore_label(self, label, ignore_indexs):
         label = np.array(label)
         temp = label.copy()
@@ -390,9 +377,8 @@ class DeformSegmentationModule(SegmentationModuleBase):
             label[temp == k] = 0
         return label
 
-    # # @torchsnooper.snoop()
     def forward(self, feed_dict, *, writer=None, segSize=None, F_Xlr_acc_map=False, count=None, epoch=None, feed_dict_info=None, feed_batch_count=None):
-        if self.cfg.TRAIN.dynamic_task_input[0] != 1:
+        if self.cfg.TRAIN.dynamic_task_input[0] != 1: # dealing with varying input image size such as pcahisto dataset
             this_size = tuple(feed_dict['img_data'].shape[-2:])
             print('this_size: {}'.format(this_size))
             self.re_initialise(self.cfg, this_size)
@@ -419,40 +405,8 @@ class DeformSegmentationModule(SegmentationModuleBase):
         xs = xs.view(-1,1,self.grid_size_x,self.grid_size_y) #saliency map
 
         y = feed_dict['seg_label'].clone()
-        if self.cfg.TRAIN.rescale_regressed_xs:
-            xs_shape = xs.shape
-            xs_reshape = xs.clone().view(xs.shape[0],-1)
-            xs_reshape_max, _ = xs_reshape.max(dim=1)
-            xs_reshape_min, _ = xs_reshape.min(dim=1)
-            xs_scale = ((xs_reshape-xs_reshape_min.view(xs.shape[0],-1))/(xs_reshape_max.view(xs.shape[0],-1)-xs_reshape_min.view(xs.shape[0],-1))).view(xs_shape)
-            xs.data = xs_scale.data.to(xs.device)
 
-        if self.cfg.MODEL.fix_saliency:
-            if self.cfg.MODEL.fix_saliency == 1: # central one gaussian
-                gaussian_saliency = torch.FloatTensor(makeGaussian(self.grid_size_x, fwhm = self.grid_size_x//4))
-            elif self.cfg.MODEL.fix_saliency == 2: # two eye gaussian
-                path = './data/Face_single_example/EYE_saliency.png'
-                eye_saliency = cv2.imread(path)
-                eye_saliency_g = cv2.cvtColor(eye_saliency, cv2.COLOR_BGR2GRAY)
-                eye_saliency_g = torch.FloatTensor(eye_saliency_g/255)
-                eye_saliency_g = F.interpolate(eye_saliency_g.unsqueeze(0).unsqueeze(0), (self.grid_size_x,self.grid_size_y), mode='bilinear').squeeze(0).squeeze(0)
-                gaussian_saliency = eye_saliency_g
-
-            m = nn.Softmax()
-            gaussian_saliency = m(gaussian_saliency)
-            gaussian_saliency = b_imresize(gaussian_saliency.unsqueeze(0).unsqueeze(0), (self.grid_size_x,self.grid_size_y), interp='bilinear').to(xs.device)
-            xs = gaussian_saliency
-        elif self.cfg.MODEL.img_gradient and (epoch == 1 or self.cfg.MODEL.fix_img_gradient):
-            # opt1: PIL implementation of edge detection
-            x_gradient = x_low.clone()[:,0,:,:] # [N,C,W,H] -> [N,W,H]
-            for i in range(x_low.shape[0]):
-                x_low_cpu = x_low.cpu()
-                x_low_img = Image.fromarray(np.array(x_low_cpu[i].permute(1,2,0)*255).astype(np.uint8))
-                x_low_Edges = x_low_img.filter(ImageFilter.FIND_EDGES)
-                x_gradient[i] = torch.tensor(np.array(x_low_Edges.convert('L'))/255.).to(x_low.device)
-            x_gradient = x_gradient.unsqueeze(1)
-            xs = nn.Upsample(size=(self.grid_size_x,self.grid_size_y), mode='bilinear')(x_gradient)
-        elif self.cfg.MODEL.gt_gradient or (self.cfg.MODEL.uniform_sample == 'BI' and self.cfg.DATASET.num_class == 2):
+        if self.cfg.MODEL.gt_gradient or (self.cfg.MODEL.uniform_sample == 'BI' and self.cfg.DATASET.num_class == 2):
             xsc = xs.clone().detach()
             for j in range(y.shape[0]):
                 if segSize is not None:
@@ -488,9 +442,6 @@ class DeformSegmentationModule(SegmentationModuleBase):
                 xsc *= xsc_mask
             xs.data = xsc.data.to(xs.device)
         elif self.cfg.TRAIN.opt_deform_LabelEdge or self.cfg.TRAIN.deform_joint_loss:
-            # Note we batch_size_per_gpu = 1 is suggested for opt_deform_LabelEdge
-            # because when it's larger than 1, those samples need to be skipped would have 0 loss
-            # thus averaged down the loss with foreground to much smaller value
             xs_target = xs.clone().detach()
             for j in range(y.shape[0]):
                 (y_j_dist, _) = np.histogram(y[j].cpu(), bins=2, range=(0, 1))
@@ -532,69 +483,29 @@ class DeformSegmentationModule(SegmentationModuleBase):
             xs_hm = F.pad(xs, (self.padding_size_y, self.padding_size_y, self.padding_size_x, self.padding_size_x), mode='reflect')
         elif self.cfg.TRAIN.def_saliency_pad_mode == 'zero':
             xs_hm = F.pad(xs, (self.padding_size_y, self.padding_size_y, self.padding_size_x, self.padding_size_x), mode='constant')
-        #
-        # training
-        if segSize is None:
+
+        if segSize is None:# training
             if self.cfg.MODEL.gt_gradient and self.cfg.MODEL.gt_gradient_intrinsic_only:
-                if 'single' in self.cfg.DATASET.list_train:
-                    return None, None, None, None
-                else:
-                    return None, None
-            if 'single' in self.cfg.DATASET.list_train:
-                y_print = feed_dict['seg_label'][0].unsqueeze(0)
-                print('y_print size: {}'.format(y_print.shape))
+                return None, None
 
             N_pretraining = self.cfg.TRAIN.deform_pretrain
             epoch = self.cfg.TRAIN.global_epoch
             # pretrain stage, simplify task of segmentation_module by smoothing x_sampled
             # non-pretain stage, no smoothing applied
             if self.cfg.TRAIN.deform_pretrain_bol or (epoch>=N_pretraining and (epoch<self.cfg.TRAIN.smooth_deform_2nd_start or epoch>self.cfg.TRAIN.smooth_deform_2nd_end)):
-                p=1 # no random size pooling to x_sampled ->
+                p=1 # no random size pooling to x_sampled
             else:
-                p=0 # random size pooling to x_sampled -> simplify task of segmentation_module
+                p=0 # random size pooling to x_sampled
 
             grid, grid_y = self.create_grid(xs_hm)
-            if self.cfg.MODEL.loss_at_high_res or self.cfg.TRAIN.separate_optimise_deformation:
+            if self.cfg.MODEL.loss_at_high_res:
                 xs_inv = 1-xs_hm
                 _, grid_inv_train = self.create_grid(xs_hm, segSize=tuple(np.array(ori_size)//self.cfg.DATASET.segm_downsampling_rate), x_inv=xs_inv)
-            if self.cfg.TRAIN.separate_optimise_deformation:
-                y = y.float()
-                y.requires_grad=True
-            if not self.cfg.MODEL.naive_upsample:
-                if self.cfg.MODEL.uniform_sample == 'BI':
-                    y_sampled = nn.Upsample(size=tuple(np.array(self.input_size_net)//self.cfg.DATASET.segm_downsampling_rate), mode='bilinear')(y.float().unsqueeze(1)).long().squeeze(1)
-                else:
-                    y_sampled = F.grid_sample(y.float().unsqueeze(1), grid_y).squeeze(1)
-            if self.cfg.TRAIN.separate_optimise_deformation and self.cfg.VAL.y_sampled_reverse and not (self.cfg.TRAIN.opt_deform_LabelEdge or self.cfg.TRAIN.deform_joint_loss):
-                unfilled_mask_2d = torch.isnan(grid_inv_train[:,:,:,0])
-                mask = torch.isnan(grid_inv_train)
-                grid_inv_train = grid_inv_train.clone().masked_fill_(mask.eq(1), 0.0)
-                y_sampled = y_sampled.unsqueeze(1)
-                y_sampled_score = y_sampled.clone().expand(y_sampled.shape[0], self.cfg.DATASET.num_class, y_sampled.shape[-2], y_sampled.shape[-1]).float()
-                y_sampled_score = y_sampled_score.clone() + 1.0
-                class_ar = torch.tensor(np.arange(self.cfg.DATASET.num_class)).float().to(y_sampled.device)
-                class_ar += 1.0
-                class_ar = class_ar.unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
-                y_sampled_score = y_sampled_score / class_ar
-                mask = y_sampled_score != 1
-                y_sampled_score.masked_fill_(mask, 0.0)
-                if self.cfg.MODEL.rev_deform_interp == 'nearest':
-                    y_sampled_score_reverse = F.grid_sample(y_sampled_score, grid_inv_train.float(), mode='nearest')
-                else:
-                    y_sampled_score_reverse = F.grid_sample(y_sampled_score, grid_inv_train.float())
-                y_sampled_score_reverse[unfilled_mask_2d.unsqueeze(1).expand(y_sampled_score_reverse.shape)] = float('nan')
-
-                for n in range(y_sampled_score_reverse.shape[0]):
-                    y_sampled_score_reverse[n] = fillMissingValues_tensor(y_sampled_score_reverse[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
-
-                mask = torch.isnan(y_sampled_score_reverse)
-                y_sampled_score_reverse = y_sampled_score_reverse.clone().masked_fill_(mask.eq(1), 0.0)
-
-                loss = self.crit(y_sampled_score_reverse, feed_dict['seg_label'])
-                acc = self.pixel_acc(y_sampled_score_reverse, feed_dict['seg_label'])
-                return loss, acc, self.save_print_grad
-
-            elif self.cfg.TRAIN.opt_deform_LabelEdge or self.cfg.TRAIN.deform_joint_loss:
+            if self.cfg.MODEL.uniform_sample == 'BI':
+                y_sampled = nn.Upsample(size=tuple(np.array(self.input_size_net)//self.cfg.DATASET.segm_downsampling_rate), mode='bilinear')(y.float().unsqueeze(1)).long().squeeze(1)
+            else:
+                y_sampled = F.grid_sample(y.float().unsqueeze(1), grid_y).squeeze(1)
+            if self.cfg.TRAIN.opt_deform_LabelEdge or self.cfg.TRAIN.deform_joint_loss:
                 assert (xs.shape == xs_target.shape), "xs shape ({}) not equvelent to xs_target shape ({})\n".format(xs.shape, xs_target.shape)
                 if self.cfg.TRAIN.opt_deform_LabelEdge_norm:
                     xs_norm = ((xs - xs.min()) / (xs.max() - xs.min()))
@@ -604,10 +515,10 @@ class DeformSegmentationModule(SegmentationModuleBase):
                 else:
                     edge_loss = self.crit_mse(xs, xs_target)
                     edge_acc = self.pixel_acc(xs.long(), xs_target.long())
-                print("Edge loss: {}\n".format(edge_loss))
-                print("Epoch {} edge_loss_scale={}".format(epoch, self.cfg.TRAIN.edge_loss_scale))
+                # print("Edge loss: {}\n".format(edge_loss))
+                # print("Epoch {} edge_loss_scale={}".format(epoch, self.cfg.TRAIN.edge_loss_scale))
                 edge_loss *= self.cfg.TRAIN.edge_loss_scale
-                print("Scaled Edge loss: {}\n".format(edge_loss))
+                # print("Scaled Edge loss: {}\n".format(edge_loss))
                 if self.cfg.TRAIN.opt_deform_LabelEdge and epoch >= self.cfg.TRAIN.fix_seg_start_epoch and epoch <= self.cfg.TRAIN.fix_seg_end_epoch:
                     return edge_loss, edge_acc, edge_loss
 
@@ -623,48 +534,39 @@ class DeformSegmentationModule(SegmentationModuleBase):
 
             if self.deep_sup_scale is not None: # use deep supervision technique
                 (pred, pred_deepsup) = self.decoder(self.encoder(x_sampled, return_feature_maps=True))
-            elif self.cfg.TRAIN.separate_optimise_deformation:
-                pred = self.encoder(x_sampled, return_feature_maps=True)
-                pred = self.decoder(x)
             else:
                 pred = self.decoder(self.encoder(x_sampled, return_feature_maps=True))
             torch.cuda.reset_max_memory_allocated(0)
 
         #     # Y sampling
-            if not self.cfg.MODEL.naive_upsample:
-                if self.cfg.MODEL.loss_at_high_res and self.cfg.MODEL.uniform_sample == 'BI':
-                    pred_sampled_train = nn.Upsample(size=ori_size, mode='bilinear')(x)
-                elif self.cfg.MODEL.loss_at_high_res:
-                    unfilled_mask_2d = torch.isnan(grid_inv_train[:,:,:,0])
-                    grid_inv_train[torch.isnan(grid_inv_train)] = 0
-                    pred_sampled_train = F.grid_sample(x, grid_inv_train.float())
-                    pred_sampled_train[unfilled_mask_2d.unsqueeze(1).expand(pred_sampled_train.shape)] = float('nan')
-                    for n in range(pred_sampled_train.shape[0]):
-                        pred_sampled_train[n] = fillMissingValues_tensor(pred_sampled_train[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
+            if self.cfg.MODEL.loss_at_high_res and self.cfg.MODEL.uniform_sample == 'BI':
+                pred_sampled_train = nn.Upsample(size=ori_size, mode='bilinear')(x)
+            elif self.cfg.MODEL.loss_at_high_res:
+                unfilled_mask_2d = torch.isnan(grid_inv_train[:,:,:,0])
+                grid_inv_train[torch.isnan(grid_inv_train)] = 0
+                pred_sampled_train = F.grid_sample(x, grid_inv_train.float())
+                pred_sampled_train[unfilled_mask_2d.unsqueeze(1).expand(pred_sampled_train.shape)] = float('nan')
+                for n in range(pred_sampled_train.shape[0]):
+                    pred_sampled_train[n] = fillMissingValues_tensor(pred_sampled_train[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
 
             if self.deep_sup_scale is not None: # use deep supervision technique
                 pred, pred_deepsup = pred, pred_deepsup
-            if self.cfg.MODEL.naive_upsample:
-                pred,image_output,hm = pred,x_sampled,xs
-            else: # deform y training
-                if self.cfg.MODEL.loss_at_high_res:
-                    pred,image_output,hm,_,pred_sampled = pred,x_sampled,xs,y_sampled,pred_sampled_train
-                else:
-                    pred,image_output,hm,feed_dict['seg_label'] = pred,x_sampled,xs,y_sampled.long()
 
-                # del xs, x_sampled, x
-                if self.cfg.MODEL.loss_at_high_res:
-                    del pred_sampled_train
-                if 'single' not in self.cfg.DATASET.list_train:
-                    del y_sampled
-            if self.cfg.MODEL.deconv:
-                loss = self.crit(ys_deconv, feed_dict['seg_label'])
+            if self.cfg.MODEL.loss_at_high_res:
+                pred,image_output,hm,_,pred_sampled = pred,x_sampled,xs,y_sampled,pred_sampled_train
             else:
-                if self.cfg.MODEL.loss_at_high_res:
-                    pred_sampled[torch.isnan(pred_sampled)] = 0 # assign residual missing with 0 probability
-                    loss = self.crit(pred_sampled, feed_dict['seg_label'])
-                else:
-                    loss = self.crit(pred, feed_dict['seg_label'])
+                pred,image_output,hm,feed_dict['seg_label'] = pred,x_sampled,xs,y_sampled.long()
+
+            # del xs, x_sampled, x
+            if self.cfg.MODEL.loss_at_high_res:
+                del pred_sampled_train
+            del y_sampled
+
+            if self.cfg.MODEL.loss_at_high_res:
+                pred_sampled[torch.isnan(pred_sampled)] = 0 # assign residual missing with 0 probability
+                loss = self.crit(pred_sampled, feed_dict['seg_label'])
+            else:
+                loss = self.crit(pred, feed_dict['seg_label'])
             if self.deep_sup_scale is not None:
                 loss_deepsup = self.crit(pred_deepsup, feed_dict['seg_label'])
                 loss = loss + loss_deepsup * self.deep_sup_scale
@@ -672,26 +574,16 @@ class DeformSegmentationModule(SegmentationModuleBase):
                 print('seg loss: {}, scaled edge_loss: {}\n'.format(loss, edge_loss))
                 loss = loss + edge_loss
 
-            if self.cfg.MODEL.deconv:
-                acc = self.pixel_acc(ys_deconv, feed_dict['seg_label'])
+            if self.cfg.MODEL.loss_at_high_res:
+                acc = self.pixel_acc(pred_sampled, feed_dict['seg_label'])
             else:
-                if self.cfg.MODEL.loss_at_high_res:
-                    acc = self.pixel_acc(pred_sampled, feed_dict['seg_label'])
-                else:
-                    acc = self.pixel_acc(pred, feed_dict['seg_label'])
+                acc = self.pixel_acc(pred, feed_dict['seg_label'])
 
-            if 'single' in self.cfg.DATASET.list_train:
-                if self.cfg.TRAIN.deform_joint_loss:
-                    return loss, acc, y_print, y_sampled[0].unsqueeze(0), edge_loss
-                else:
-                    return loss, acc, y_print, y_sampled[0].unsqueeze(0)
+            if self.cfg.TRAIN.deform_joint_loss:
+                return loss, acc, edge_loss
             else:
-                if self.cfg.TRAIN.deform_joint_loss:
-                    return loss, acc, edge_loss
-                else:
-                    return loss, acc
-        # # inference
-        else:
+                return loss, acc
+        else:# # inference
             t = time.time()
             xs_inv = 1-xs_hm
             grid, grid_inv = self.create_grid(xs_hm, segSize=segSize, x_inv=xs_inv)
@@ -701,161 +593,96 @@ class DeformSegmentationModule(SegmentationModuleBase):
             else:
                 x_sampled = F.grid_sample(x, grid)
                 x_sampled = nn.Upsample(size=self.input_size_net_infer,mode='bilinear')(x_sampled)
-            if self.cfg.MODEL.naive_upsample:
-                x = self.decoder(self.encoder(x_sampled, return_feature_maps=True), segSize=segSize)
-            else:
-                segSize_temp = tuple(self.input_size_net_infer)
-                print('eval segSize_temp: {}'.format(segSize_temp))
-                x = self.decoder(self.encoder(x_sampled, return_feature_maps=True), segSize=segSize_temp)
+
+            segSize_temp = tuple(self.input_size_net_infer)
+            print('eval segSize_temp: {}'.format(segSize_temp))
+            x = self.decoder(self.encoder(x_sampled, return_feature_maps=True), segSize=segSize_temp)
         #     # Y sampling
-            if not self.cfg.MODEL.naive_upsample:
+            if self.cfg.MODEL.uniform_sample == 'BI':
+                y_sampled = nn.Upsample(size=tuple(np.array(self.input_size_net_infer)), mode='bilinear')(y.float().unsqueeze(1)).long().squeeze(1)
+            else:
+                y_sampled = F.grid_sample(y.float().unsqueeze(1), grid_y, mode='nearest').long().squeeze(1)
+
+            if self.cfg.MODEL.uniform_sample == 'BI' or self.cfg.MODEL.uniform_sample == 'nearest':
                 if self.cfg.MODEL.uniform_sample == 'BI':
-                    y_sampled = nn.Upsample(size=tuple(np.array(self.input_size_net_infer)), mode='bilinear')(y.float().unsqueeze(1)).long().squeeze(1)
-                else:
-                    y_sampled = F.grid_sample(y.float().unsqueeze(1), grid_y, mode='nearest').long().squeeze(1)
+                    pred_sampled = nn.Upsample(size=segSize, mode='bilinear')(x)
+                elif self.cfg.MODEL.uniform_sample == 'nearest':
+                    pred_sampled = nn.Upsample(size=segSize, mode='nearest')(x)
+                pred_sampled_unfilled_mask_2d = torch.isnan(grid_inv[:,:,:,0])
+                if self.cfg.VAL.y_sampled_reverse:
+                    assert (self.cfg.MODEL.rev_deform_interp == 'nearest'), "y_sampled_reverse only appliable to nearest rev_deform_interp"
+                    y_sampled_reverse =  nn.Upsample(size=segSize, mode='nearest')(y_sampled.float().unsqueeze(1)).squeeze(1)
+                if self.cfg.VAL.x_sampled_reverse:
+                    x_sampled_unorm = unorm(x_sampled)
+                    x_sampled_reverse =  nn.Upsample(size=segSize, mode='bilinear')(x_sampled_unorm)
 
-                if self.cfg.MODEL.uniform_sample == 'BI' or self.cfg.MODEL.uniform_sample == 'nearest':
-                    if self.cfg.MODEL.uniform_sample == 'BI':
-                        pred_sampled = nn.Upsample(size=segSize, mode='bilinear')(x)
-                    elif self.cfg.MODEL.uniform_sample == 'nearest':
-                        pred_sampled = nn.Upsample(size=segSize, mode='nearest')(x)
-                    pred_sampled_unfilled_mask_2d = torch.isnan(grid_inv[:,:,:,0])
-                    if self.cfg.VAL.y_sampled_reverse:
-                        assert (self.cfg.MODEL.rev_deform_interp == 'nearest'), "y_sampled_reverse only appliable to nearest rev_deform_interp"
-                        y_sampled_reverse =  nn.Upsample(size=segSize, mode='nearest')(y_sampled.float().unsqueeze(1)).squeeze(1)
-                    if self.cfg.VAL.x_sampled_reverse:
-                        def unorm(img):
-                            if 'GLEASON' in self.cfg.DATASET.list_train:
-                                mean=[0.748, 0.611, 0.823]
-                                std=[0.146, 0.245, 0.119]
-                            elif 'Digest' in self.cfg.DATASET.list_train:
-                                mean=[0.816, 0.697, 0.792]
-                                std=[0.160, 0.277, 0.198]
-                            elif 'ADE' in self.cfg.DATASET.list_train:
-                                mean=[0.485, 0.456, 0.406]
-                                std=[0.229, 0.224, 0.225]
-                            elif 'CITYSCAPE' in self.cfg.DATASET.list_train or 'Cityscape' in self.cfg.DATASET.list_train:
-                                mean=[0.485, 0.456, 0.406]
-                                std=[0.229, 0.224, 0.225]
-                            elif 'histo' in self.cfg.DATASET.list_train:
-                                mean=[0.8223, 0.7783, 0.7847]
-                                std=[0.210, 0.216, 0.241]
-                            elif 'DeepGlob' in self.cfg.DATASET.list_train:
-                                mean=[0.282, 0.379, 0.408]
-                                std=[0.089, 0.101, 0.127]
-                            elif 'Face_single_example' in self.cfg.DATASET.root_dataset or 'Face_single_example' in self.cfg.DATASET.list_train:
-                                mean=[0.282, 0.379, 0.408]
-                                std=[0.089, 0.101, 0.127]
-                            elif 'Histo' in self.cfg.DATASET.root_dataset or 'histomri' in self.cfg.DATASET.list_train or 'histomri' in self.cfg.DATASET.root_dataset:
-                                mean=[0.8223, 0.7783, 0.7847]
-                                std=[0.210, 0.216, 0.241]
-                            else:
-                                raise Exception('Unknown root for normalisation!')
-                            for t, m, s in zip(img, mean, std):
-                                t.mul_(s).add_(m)
-                                # The normalize code -> t.sub_(m).div_(s)
-                            return img
-                        x_sampled_unorm = unorm(x_sampled)
-                        x_sampled_reverse =  nn.Upsample(size=segSize, mode='bilinear')(x_sampled_unorm)
-
-                elif self.cfg.MODEL.rev_deform_opt == 51:
-                    pred_sampled_unfilled_mask_2d = torch.isnan(grid_inv[:,:,:,0])
-                    grid_inv[torch.isnan(grid_inv)] = 0
-                    pred_sampled = F.grid_sample(x, grid_inv.float())
-                    pred_sampled[pred_sampled_unfilled_mask_2d.unsqueeze(1).expand(pred_sampled.shape)] = float('nan')
+            elif self.cfg.MODEL.rev_deform_opt == 51:
+                pred_sampled_unfilled_mask_2d = torch.isnan(grid_inv[:,:,:,0])
+                grid_inv[torch.isnan(grid_inv)] = 0
+                pred_sampled = F.grid_sample(x, grid_inv.float())
+                pred_sampled[pred_sampled_unfilled_mask_2d.unsqueeze(1).expand(pred_sampled.shape)] = float('nan')
+                if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
+                    pred_sampled_cpu = pred_sampled.cpu()
+                for n in range(pred_sampled.shape[0]):
                     if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
-                        pred_sampled_cpu = pred_sampled.cpu()
-                    for n in range(pred_sampled.shape[0]):
-                        if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
-                            pred_sampled[n] = torch.tensor(fillMissingValues_tensor(np.array(pred_sampled_cpu[n]), interp_mode=self.cfg.MODEL.rev_deform_interp))
-                        else:
-                            pred_sampled[n] = fillMissingValues_tensor(pred_sampled[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
+                        pred_sampled[n] = torch.tensor(fillMissingValues_tensor(np.array(pred_sampled_cpu[n]), interp_mode=self.cfg.MODEL.rev_deform_interp))
+                    else:
+                        pred_sampled[n] = fillMissingValues_tensor(pred_sampled[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
 
-                    if self.cfg.VAL.x_sampled_reverse:
-                        def unorm(img):
-                            if 'GLEASON' in self.cfg.DATASET.list_train:
-                                mean=[0.748, 0.611, 0.823]
-                                std=[0.146, 0.245, 0.119]
-                            elif 'Digest' in self.cfg.DATASET.list_train:
-                                mean=[0.816, 0.697, 0.792]
-                                std=[0.160, 0.277, 0.198]
-                            elif 'ADE' in self.cfg.DATASET.list_train:
-                                mean=[0.485, 0.456, 0.406]
-                                std=[0.229, 0.224, 0.225]
-                            elif 'CITYSCAPE' in self.cfg.DATASET.list_train or 'Cityscape' in self.cfg.DATASET.list_train:
-                                mean=[0.485, 0.456, 0.406]
-                                std=[0.229, 0.224, 0.225]
-                            elif 'histo' in self.cfg.DATASET.list_train:
-                                mean=[0.8223, 0.7783, 0.7847]
-                                std=[0.210, 0.216, 0.241]
-                            elif 'DeepGlob' in self.cfg.DATASET.list_train:
-                                mean=[0.282, 0.379, 0.408]
-                                std=[0.089, 0.101, 0.127]
-                            elif 'Face_single_example' in self.cfg.DATASET.root_dataset or 'Face_single_example' in self.cfg.DATASET.list_train:
-                                mean=[0.282, 0.379, 0.408]
-                                std=[0.089, 0.101, 0.127]
-                            elif 'Histo' in self.cfg.DATASET.root_dataset or 'histomri' in self.cfg.DATASET.list_train or 'histomri' in self.cfg.DATASET.root_dataset:
-                                mean=[0.8223, 0.7783, 0.7847]
-                                std=[0.210, 0.216, 0.241]
-                            else:
-                                raise Exception('Unknown root for normalisation!')
-                            for t, m, s in zip(img, mean, std):
-                                t.mul_(s).add_(m)
-                            return img
-                        x_sampled_unorm = unorm(x_sampled)
-                        x_sampled_reverse = F.grid_sample(x_sampled_unorm, grid_inv.float())
-                        x_sampled_reverse[pred_sampled_unfilled_mask_2d.unsqueeze(1).expand(x_sampled_reverse.shape)] = float('nan')
+                if self.cfg.VAL.x_sampled_reverse:
+                    x_sampled_unorm = unorm(x_sampled)
+                    x_sampled_reverse = F.grid_sample(x_sampled_unorm, grid_inv.float())
+                    x_sampled_reverse[pred_sampled_unfilled_mask_2d.unsqueeze(1).expand(x_sampled_reverse.shape)] = float('nan')
+                    if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
+                        x_sampled_reverse_cpu = x_sampled_reverse.cpu()
+                    for n in range(x_sampled_reverse.shape[0]):
                         if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
-                            x_sampled_reverse_cpu = x_sampled_reverse.cpu()
-                        for n in range(x_sampled_reverse.shape[0]):
-                            if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
-                                x_sampled_reverse[n] = torch.tensor(fillMissingValues_tensor(np.array(x_sampled_reverse_cpu[n]), interp_mode=self.cfg.MODEL.rev_deform_interp))
-                            else:
-                                x_sampled_reverse[n] = fillMissingValues_tensor(x_sampled_reverse[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
-                                x_sampled_reverse[n][torch.isnan(x_sampled_reverse[n])] = x_sampled_reverse[n][~torch.isnan(x_sampled_reverse[n])].mean()
-
-                    if self.cfg.VAL.y_sampled_reverse:
-                        if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
-                            y_sampled_reverse = F.grid_sample(y_sampled.float().unsqueeze(1), grid_inv.float(), mode='nearest').squeeze(1)
-                            y_sampled_reverse[pred_sampled_unfilled_mask_2d.expand(y_sampled_reverse.shape)] = float('nan')
-                            if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
-                                y_sampled_reverse_cpu = y_sampled_reverse.unsqueeze(1).cpu()
-                            for n in range(y_sampled_reverse.shape[0]):
-                                if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
-                                    y_sampled_reverse[n] = torch.tensor(fillMissingValues_tensor(np.array(y_sampled_reverse_cpu[n]), interp_mode=self.cfg.MODEL.rev_deform_interp)).squeeze(1)
-                                else:
-                                    y_sampled_reverse[n] = fillMissingValues_tensor(y_sampled_reverse[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
+                            x_sampled_reverse[n] = torch.tensor(fillMissingValues_tensor(np.array(x_sampled_reverse_cpu[n]), interp_mode=self.cfg.MODEL.rev_deform_interp))
                         else:
-                            y_sampled_score = y_sampled.unsqueeze(1).expand(y_sampled.shape[0], self.cfg.DATASET.num_class, y_sampled.shape[-2], y_sampled.shape[-1])
-                            y_sampled_score = y_sampled_score.float()
-                            for c in range(self.cfg.DATASET.num_class):
-                                mask = (y_sampled_score[:,c,:,:] == c) # nate make sure classes are mapped to the range [0,num_class-1]
-                                un_mask = (y_sampled_score[:,c,:,:] != c)
-                                y_sampled_score[:,c,:,:][mask] = 1.0
-                                y_sampled_score[:,c,:,:][un_mask] = 0.0
-                            y_sampled_score_reverse = F.grid_sample(y_sampled_score, grid_inv.float())
-                            y_sampled_score_reverse[pred_sampled_unfilled_mask_2d.unsqueeze(1).expand(y_sampled_score_reverse.shape)] = float('nan')
-                            for n in range(y_sampled_score_reverse.shape[0]):
-                                y_sampled_score_reverse[n] = fillMissingValues_tensor(y_sampled_score_reverse[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
-                            _, y_sampled_reverse = torch.max(y_sampled_score_reverse, dim=1)
-                    
-                ## FILL residual missing
-                if feed_batch_count != None and not 'single' in self.cfg.DATASET.list_train:
-                    if feed_batch_count < self.cfg.VAL.batch_size:
-                        self.num_res_nan_percentage = []
-                    self.num_res_nan_percentage.append(float(torch.isnan(pred_sampled).sum()*100.0) / float(pred_sampled.shape[0]*pred_sampled.shape[1]*pred_sampled.shape[2]*pred_sampled.shape[3]))
-                pred_sampled[torch.isnan(pred_sampled)] = 0 # assign residual missing with 0 probability
+                            x_sampled_reverse[n] = fillMissingValues_tensor(x_sampled_reverse[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
+                            x_sampled_reverse[n][torch.isnan(x_sampled_reverse[n])] = x_sampled_reverse[n][~torch.isnan(x_sampled_reverse[n])].mean()
+
+                if self.cfg.VAL.y_sampled_reverse:
+                    if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
+                        y_sampled_reverse = F.grid_sample(y_sampled.float().unsqueeze(1), grid_inv.float(), mode='nearest').squeeze(1)
+                        y_sampled_reverse[pred_sampled_unfilled_mask_2d.expand(y_sampled_reverse.shape)] = float('nan')
+                        if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
+                            y_sampled_reverse_cpu = y_sampled_reverse.unsqueeze(1).cpu()
+                        for n in range(y_sampled_reverse.shape[0]):
+                            if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
+                                y_sampled_reverse[n] = torch.tensor(fillMissingValues_tensor(np.array(y_sampled_reverse_cpu[n]), interp_mode=self.cfg.MODEL.rev_deform_interp)).squeeze(1)
+                            else:
+                                y_sampled_reverse[n] = fillMissingValues_tensor(y_sampled_reverse[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
+                    else:
+                        y_sampled_score = y_sampled.unsqueeze(1).expand(y_sampled.shape[0], self.cfg.DATASET.num_class, y_sampled.shape[-2], y_sampled.shape[-1])
+                        y_sampled_score = y_sampled_score.float()
+                        for c in range(self.cfg.DATASET.num_class):
+                            mask = (y_sampled_score[:,c,:,:] == c) # nate make sure classes are mapped to the range [0,num_class-1]
+                            un_mask = (y_sampled_score[:,c,:,:] != c)
+                            y_sampled_score[:,c,:,:][mask] = 1.0
+                            y_sampled_score[:,c,:,:][un_mask] = 0.0
+                        y_sampled_score_reverse = F.grid_sample(y_sampled_score, grid_inv.float())
+                        y_sampled_score_reverse[pred_sampled_unfilled_mask_2d.unsqueeze(1).expand(y_sampled_score_reverse.shape)] = float('nan')
+                        for n in range(y_sampled_score_reverse.shape[0]):
+                            y_sampled_score_reverse[n] = fillMissingValues_tensor(y_sampled_score_reverse[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
+                        _, y_sampled_reverse = torch.max(y_sampled_score_reverse, dim=1)
+
+            ## FILL residual missing
+            if feed_batch_count != None:
+                if feed_batch_count < self.cfg.VAL.batch_size:
+                    self.num_res_nan_percentage = []
+                self.num_res_nan_percentage.append(float(torch.isnan(pred_sampled).sum()*100.0) / float(pred_sampled.shape[0]*pred_sampled.shape[1]*pred_sampled.shape[2]*pred_sampled.shape[3]))
+            pred_sampled[torch.isnan(pred_sampled)] = 0 # assign residual missing with 0 probability
+
             #================ transfer original ... = self.seg_deform ...
             if self.cfg.VAL.no_upsample:
-                pred,image_output,hm = x,x_sampled,xs
-            elif self.cfg.MODEL.naive_upsample:
                 pred,image_output,hm = x,x_sampled,xs
             else:
                 if self.cfg.MODEL.rev_deform_opt == 51:
                     pred,image_output,hm,pred_sampled,pred_sampled_unfilled_mask_2d = x,x_sampled,xs,pred_sampled,pred_sampled_unfilled_mask_2d
                 else:
                     pred,image_output,hm,pred_sampled = x,x_sampled,xs,pred_sampled
-            #================ transfer original ... = self.seg_deform ...
+            #================ visualisation ================
             if (writer is not None and feed_batch_count < 4 and feed_batch_count != None) or self.cfg.TRAIN.train_eval_visualise:
                 if self.cfg.TRAIN.train_eval_visualise:
                     dir_result = os.path.join(self.cfg.DIR, "visual_epoch_{}".format(epoch))
@@ -901,39 +728,6 @@ class DeformSegmentationModule(SegmentationModuleBase):
                     if not os.path.isdir(dir_result_sampling_mask):
                         os.makedirs(dir_result_sampling_mask)
 
-
-                def unorm(img):
-                    if 'GLEASON' in self.cfg.DATASET.root_dataset:
-                        mean=[0.748, 0.611, 0.823]
-                        std=[0.146, 0.245, 0.119]
-                    elif 'Digest' in self.cfg.DATASET.list_train:
-                        mean=[0.816, 0.697, 0.792]
-                        std=[0.160, 0.277, 0.198]
-                    elif 'ADE' in self.cfg.DATASET.list_train:
-                        mean=[0.485, 0.456, 0.406]
-                        std=[0.229, 0.224, 0.225]
-                    elif 'CITYSCAPE' in self.cfg.DATASET.list_train or 'Cityscape' in self.cfg.DATASET.list_train:
-                        mean=[0.485, 0.456, 0.406]
-                        std=[0.229, 0.224, 0.225]
-                    elif 'histo' in self.cfg.DATASET.list_train:
-                        mean=[0.8223, 0.7783, 0.7847]
-                        std=[0.210, 0.216, 0.241]
-                    elif 'DeepGlob' in self.cfg.DATASET.list_train:
-                        mean=[0.282, 0.379, 0.408]
-                        std=[0.089, 0.101, 0.127]
-                    elif 'Face_single_example' in self.cfg.DATASET.root_dataset or 'Face_single_example' in self.cfg.DATASET.list_train:
-                        mean=[0.282, 0.379, 0.408]
-                        std=[0.089, 0.101, 0.127]
-                    elif 'Histo' in self.cfg.DATASET.root_dataset or 'histomri' in self.cfg.DATASET.list_train or 'histomri' in self.cfg.DATASET.root_dataset:
-                        mean=[0.8223, 0.7783, 0.7847]
-                        std=[0.210, 0.216, 0.241]
-                    else:
-                        raise Exception('Unknown root for normalisation!')
-                    for t, m, s in zip(img, mean, std):
-                        t.mul_(s).add_(m)
-                        # The normalize code -> t.sub_(m).div_(s)
-                    return img
-
                 if self.cfg.DATASET.grid_path != '':
                     grid_img = Image.open(self.cfg.DATASET.grid_path).convert('RGB')
                     grid_resized = grid_img.resize(segSize, Image.BILINEAR)
@@ -960,10 +754,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
                 hm_shape = hm.shape
                 hm = (hm.view(hm.shape[0],-1)/hm_max.view(hm.shape[0],-1)).view(hm_shape)
                 for i in range(hm.shape[0]):
-                    if self.cfg.MODEL.img_gradient:
-                        xhm = vutils.make_grid(xs[i].unsqueeze(0), normalize=True, scale_each=True)
-                    else:
-                        xhm = vutils.make_grid(hm[i].unsqueeze(0), normalize=True, scale_each=True)
+                    xhm = vutils.make_grid(hm[i].unsqueeze(0), normalize=True, scale_each=True)
                     writer.add_image('eval_{}/Saliency Map'.format(feed_batch_count*self.cfg.VAL.batch_size+i), xhm, count)
                     if self.cfg.TRAIN.train_eval_visualise:
                         img_name = feed_dict['info'].split('/')[-1]
@@ -1004,13 +795,12 @@ class DeformSegmentationModule(SegmentationModuleBase):
                         y_print = vutils.make_grid(y_print, normalize=False, scale_each=True)
                         writer.add_image('eval_{}/Label Original'.format(feed_batch_count*self.cfg.VAL.batch_size+i), y_print, count)
 
-                    if not self.cfg.MODEL.naive_upsample:
-                        y_sampled_color = colorEncode(as_numpy(y_sampled[i].unsqueeze(0).squeeze(0)), colors)
-                        y_sampled_print = torch.from_numpy(y_sampled_color.astype(np.uint8)).unsqueeze(0).permute(0,3,1,2)
-                        if self.cfg.TRAIN.train_eval_visualise:
-                            Image.fromarray(y_sampled_color).save(os.path.join(dir_result_lb_samp, os.path.splitext(img_name)[0] + '.png'))
-                        y_sampled_print = vutils.make_grid(y_sampled_print, normalize=False, scale_each=True)
-                        writer.add_image('eval_{}/Label Sampled'.format(feed_batch_count*self.cfg.VAL.batch_size+i), y_sampled_print, count)
+                    y_sampled_color = colorEncode(as_numpy(y_sampled[i].unsqueeze(0).squeeze(0)), colors)
+                    y_sampled_print = torch.from_numpy(y_sampled_color.astype(np.uint8)).unsqueeze(0).permute(0,3,1,2)
+                    if self.cfg.TRAIN.train_eval_visualise:
+                        Image.fromarray(y_sampled_color).save(os.path.join(dir_result_lb_samp, os.path.splitext(img_name)[0] + '.png'))
+                    y_sampled_print = vutils.make_grid(y_sampled_print, normalize=False, scale_each=True)
+                    writer.add_image('eval_{}/Label Sampled'.format(feed_batch_count*self.cfg.VAL.batch_size+i), y_sampled_print, count)
 
                     if self.cfg.VAL.y_sampled_reverse:
                         y_sampled_reverse_color = colorEncode(as_numpy(y_sampled_reverse[i].unsqueeze(0).squeeze(0)), colors)
@@ -1020,65 +810,48 @@ class DeformSegmentationModule(SegmentationModuleBase):
                         y_sampled_reverse_print = vutils.make_grid(y_sampled_reverse_print, normalize=False, scale_each=True)
                         writer.add_image('eval_{}/Interpolated Label Sampled'.format(feed_batch_count*self.cfg.VAL.batch_size+i), y_sampled_reverse_print, count)
 
+                    _, pred_print_sampled = torch.max(pred_sampled[i].unsqueeze(0), dim=1)
+                    pred_sampled_color = colorEncode(as_numpy(pred_print_sampled.squeeze(0)), colors)
+                    if self.cfg.MODEL.rev_deform_opt == 51:
+                        pred_print_sampled_unfilled = pred_print_sampled.clone()
+                        pred_print_sampled_unfilled[pred_sampled_unfilled_mask_2d[i].unsqueeze(0)] = 30
+                        pred_sampled_color_unfilled = colorEncode(as_numpy(pred_print_sampled_unfilled.squeeze(0)), colors)
+                    pred_print_sampled = torch.from_numpy(pred_sampled_color.astype(np.uint8)).unsqueeze(0).permute(0,3,1,2)
+                    if self.cfg.TRAIN.train_eval_visualise:
+                        Image.fromarray(pred_sampled_color).save(os.path.join(dir_result_int_def_pred, os.path.splitext(img_name)[0] + '.png'))
+                    pred_print_sampled = vutils.make_grid(pred_print_sampled, normalize=False, scale_each=True)
+                    writer.add_image('eval_{}/Interpolated Deformed Pred'.format(feed_batch_count*self.cfg.VAL.batch_size+i), pred_print_sampled, count)
 
-                    if not self.cfg.MODEL.naive_upsample:
-                        if self.cfg.MODEL.deconv:
-                            _, y_deconv = torch.max(ys_deconv, dim=1)
-                            pred_sampled_color = colorEncode(as_numpy(y_deconv.squeeze(0)), colors)
-                        else:
-                            _, pred_print_sampled = torch.max(pred_sampled[i].unsqueeze(0), dim=1)
-                            pred_sampled_color = colorEncode(as_numpy(pred_print_sampled.squeeze(0)), colors)
-                            if self.cfg.MODEL.rev_deform_opt == 51:
-                                pred_print_sampled_unfilled = pred_print_sampled.clone()
-                                pred_print_sampled_unfilled[pred_sampled_unfilled_mask_2d[i].unsqueeze(0)] = 30
-                                pred_sampled_color_unfilled = colorEncode(as_numpy(pred_print_sampled_unfilled.squeeze(0)), colors)
-                        pred_print_sampled = torch.from_numpy(pred_sampled_color.astype(np.uint8)).unsqueeze(0).permute(0,3,1,2)
+                    if self.cfg.MODEL.rev_deform_opt == 51:
+                        pred_print_sampled_unfilled = torch.from_numpy(pred_sampled_color_unfilled.astype(np.uint8)).unsqueeze(0).permute(0,3,1,2)
                         if self.cfg.TRAIN.train_eval_visualise:
-                            Image.fromarray(pred_sampled_color).save(os.path.join(dir_result_int_def_pred, os.path.splitext(img_name)[0] + '.png'))
-                        pred_print_sampled = vutils.make_grid(pred_print_sampled, normalize=False, scale_each=True)
-                        writer.add_image('eval_{}/Interpolated Deformed Pred'.format(feed_batch_count*self.cfg.VAL.batch_size+i), pred_print_sampled, count)
-
-                        if self.cfg.MODEL.rev_deform_opt == 51:
-                            pred_print_sampled_unfilled = torch.from_numpy(pred_sampled_color_unfilled.astype(np.uint8)).unsqueeze(0).permute(0,3,1,2)
-                            if self.cfg.TRAIN.train_eval_visualise:
-                                Image.fromarray(pred_sampled_color_unfilled).save(os.path.join(dir_result_int_def_pred_unfill, os.path.splitext(img_name)[0] + '.png'))
-                                red_spot_mask_2d = torch.zeros(pred_sampled_unfilled_mask_2d[i].shape)
-                                red_spot_mask_2d[~pred_sampled_unfilled_mask_2d[i]] = 1
-                                red_spot_mask_2d = np.array(red_spot_mask_2d)
-                                red_spot_mask_2d_dilate = ndimage.binary_dilation(red_spot_mask_2d, iterations=2)
-                                img_sampling_masked = feed_dict['img_ori']
-                                img_sampling_masked[:,:,0][red_spot_mask_2d_dilate] = 255.0
-                                img_sampling_masked[:,:,1][red_spot_mask_2d_dilate] = 0.0
-                                img_sampling_masked[:,:,2][red_spot_mask_2d_dilate] = 0.0
-                                Image.fromarray(img_sampling_masked.astype(np.uint8)).save(os.path.join(dir_result_sampling_mask, os.path.splitext(img_name)[0] + '.png'))
-                            pred_print_sampled_unfilled = vutils.make_grid(pred_print_sampled_unfilled, normalize=False, scale_each=True)
-                            writer.add_image('eval_{}/Interpolated Deformed Pred unfilled'.format(feed_batch_count*self.cfg.VAL.batch_size+i), pred_print_sampled_unfilled, count)
+                            Image.fromarray(pred_sampled_color_unfilled).save(os.path.join(dir_result_int_def_pred_unfill, os.path.splitext(img_name)[0] + '.png'))
+                            red_spot_mask_2d = torch.zeros(pred_sampled_unfilled_mask_2d[i].shape)
+                            red_spot_mask_2d[~pred_sampled_unfilled_mask_2d[i]] = 1
+                            red_spot_mask_2d = np.array(red_spot_mask_2d)
+                            red_spot_mask_2d_dilate = ndimage.binary_dilation(red_spot_mask_2d, iterations=2)
+                            img_sampling_masked = feed_dict['img_ori']
+                            img_sampling_masked[:,:,0][red_spot_mask_2d_dilate] = 255.0
+                            img_sampling_masked[:,:,1][red_spot_mask_2d_dilate] = 0.0
+                            img_sampling_masked[:,:,2][red_spot_mask_2d_dilate] = 0.0
+                            Image.fromarray(img_sampling_masked.astype(np.uint8)).save(os.path.join(dir_result_sampling_mask, os.path.splitext(img_name)[0] + '.png'))
+                        pred_print_sampled_unfilled = vutils.make_grid(pred_print_sampled_unfilled, normalize=False, scale_each=True)
+                        writer.add_image('eval_{}/Interpolated Deformed Pred unfilled'.format(feed_batch_count*self.cfg.VAL.batch_size+i), pred_print_sampled_unfilled, count)
 
                 self.print_original_y = False
-
-            if writer is not None and feed_batch_count == -1 and feed_batch_count != None and not 'single' in self.cfg.DATASET.list_train:
+            #================ end visualisation ================
+            if writer is not None and feed_batch_count == -1 and feed_batch_count != None:
                 print('EVAL: pred_sampled num residual nan percentage: {} %\n'.format(np.array(self.num_res_nan_percentage).mean()))
                 writer.add_scalar('Residual_nan_percentage_eval', np.array(self.num_res_nan_percentage).mean(), count)
 
             if F_Xlr_acc_map:
-                if self.cfg.MODEL.naive_upsample:
-                    loss = self.crit(pred, feed_dict['seg_label'])
-                    return pred, loss
-                elif self.cfg.MODEL.deconv:
-                    loss = self.crit(ys_deconv, feed_dict['seg_label'])
-                else:
-                    loss = self.crit(pred_sampled, feed_dict['seg_label'])
-                    return pred_sampled, loss
+                loss = self.crit(pred_sampled, feed_dict['seg_label'])
+                return pred_sampled, loss
             else:
-                if self.cfg.MODEL.naive_upsample:
-                    return pred
-                elif self.cfg.MODEL.deconv:
-                    return ys_deconv
+                if self.cfg.VAL.y_sampled_reverse:
+                    return pred_sampled, pred, y_sampled, y_sampled_reverse.long()
                 else:
-                    if self.cfg.VAL.y_sampled_reverse:
-                        return pred_sampled, pred, y_sampled, y_sampled_reverse.long()
-                    else:
-                        return pred_sampled, pred, y_sampled
+                    return pred_sampled, pred, y_sampled
 
 class SegmentationModule(SegmentationModuleBase):
     def __init__(self, net_enc, net_dec, crit, cfg, deep_sup_scale=None, net_fov_res=None):
@@ -1128,7 +901,6 @@ class SegmentationModule(SegmentationModuleBase):
                 return pred, loss
             else:
                 return pred
-
 
 class ModelBuilder:
     # custom weights initialization
@@ -1269,454 +1041,3 @@ class ModelBuilder:
             net_compress.load_state_dict(
                 torch.load(weights, map_location=lambda storage, loc: storage), strict=False)
         return net_compress
-
-
-
-def conv3x3_bn_relu(in_planes, out_planes, stride=1):
-    "3x3 convolution + BN + relu"
-    return nn.Sequential(
-            nn.Conv2d(in_planes, out_planes, kernel_size=3,
-                      stride=stride, padding=1, bias=False),
-            BatchNorm2d(out_planes),
-            nn.ReLU(inplace=True),
-            )
-
-
-class Resnet(nn.Module):
-    def __init__(self, orig_resnet):
-        super(Resnet, self).__init__()
-
-        # take pretrained resnet, except AvgPool and FC
-        self.conv1 = orig_resnet.conv1
-        self.bn1 = orig_resnet.bn1
-        self.relu1 = orig_resnet.relu1
-        self.conv2 = orig_resnet.conv2
-        self.bn2 = orig_resnet.bn2
-        self.relu2 = orig_resnet.relu2
-        self.conv3 = orig_resnet.conv3
-        self.bn3 = orig_resnet.bn3
-        self.relu3 = orig_resnet.relu3
-        self.maxpool = orig_resnet.maxpool
-        self.layer1 = orig_resnet.layer1
-        self.layer2 = orig_resnet.layer2
-        self.layer3 = orig_resnet.layer3
-        self.layer4 = orig_resnet.layer4
-
-    def forward(self, x, return_feature_maps=False):
-        conv_out = []
-
-        x = self.relu1(self.bn1(self.conv1(x)))
-        x = self.relu2(self.bn2(self.conv2(x)))
-        x = self.relu3(self.bn3(self.conv3(x)))
-        x = self.maxpool(x)
-
-        x = self.layer1(x); conv_out.append(x);
-        x = self.layer2(x); conv_out.append(x);
-        x = self.layer3(x); conv_out.append(x);
-        x = self.layer4(x); conv_out.append(x);
-
-        if return_feature_maps:
-            return conv_out
-        return [x]
-
-
-class ResnetDilated(nn.Module):
-    def __init__(self, orig_resnet, dilate_scale=8):
-        super(ResnetDilated, self).__init__()
-        from functools import partial
-
-        if dilate_scale == 2:
-            orig_resnet.conv1.apply(
-                partial(self._nostride_dilate, dilate=2))
-            orig_resnet.layer2.apply(
-                partial(self._nostride_dilate, dilate=4))
-            orig_resnet.layer3.apply(
-                partial(self._nostride_dilate, dilate=8))
-            orig_resnet.layer4.apply(
-                partial(self._nostride_dilate, dilate=16))
-        elif dilate_scale == 4:
-            orig_resnet.layer2.apply(
-                partial(self._nostride_dilate, dilate=2))
-            orig_resnet.layer3.apply(
-                partial(self._nostride_dilate, dilate=4))
-            orig_resnet.layer4.apply(
-                partial(self._nostride_dilate, dilate=8))
-        elif dilate_scale == 8:
-            orig_resnet.layer3.apply(
-                partial(self._nostride_dilate, dilate=2))
-            orig_resnet.layer4.apply(
-                partial(self._nostride_dilate, dilate=4))
-        elif dilate_scale == 16:
-            orig_resnet.layer4.apply(
-                partial(self._nostride_dilate, dilate=2))
-
-        # take pretrained resnet, except AvgPool and FC
-        self.conv1 = orig_resnet.conv1
-        self.bn1 = orig_resnet.bn1
-        self.relu1 = orig_resnet.relu1
-        self.conv2 = orig_resnet.conv2
-        self.bn2 = orig_resnet.bn2
-        self.relu2 = orig_resnet.relu2
-        self.conv3 = orig_resnet.conv3
-        self.bn3 = orig_resnet.bn3
-        self.relu3 = orig_resnet.relu3
-        self.maxpool = orig_resnet.maxpool
-        self.layer1 = orig_resnet.layer1
-        self.layer2 = orig_resnet.layer2
-        self.layer3 = orig_resnet.layer3
-        self.layer4 = orig_resnet.layer4
-
-    def _nostride_dilate(self, m, dilate):
-        classname = m.__class__.__name__
-        if classname.find('Conv') != -1:
-            # the convolution with stride
-            if m.stride == (2, 2):
-                m.stride = (1, 1)
-                if m.kernel_size == (3, 3):
-                    m.dilation = (dilate//2, dilate//2)
-                    m.padding = (dilate//2, dilate//2)
-            # other convoluions
-            else:
-                if m.kernel_size == (3, 3):
-                    m.dilation = (dilate, dilate)
-                    m.padding = (dilate, dilate)
-
-    def forward(self, x, return_feature_maps=False):
-        conv_out = []
-
-        x = self.relu1(self.bn1(self.conv1(x)))
-        x = self.relu2(self.bn2(self.conv2(x)))
-        x = self.relu3(self.bn3(self.conv3(x)))
-        x = self.maxpool(x)
-
-        x = self.layer1(x); conv_out.append(x);
-        x = self.layer2(x); conv_out.append(x);
-        x = self.layer3(x); conv_out.append(x);
-        x = self.layer4(x); conv_out.append(x);
-
-        if return_feature_maps:
-            return conv_out
-        return [x]
-
-
-class MobileNetV2Dilated(nn.Module):
-    def __init__(self, orig_net, dilate_scale=8):
-        super(MobileNetV2Dilated, self).__init__()
-        from functools import partial
-
-        # take pretrained mobilenet features
-        self.features = orig_net.features[:-1]
-
-        self.total_idx = len(self.features)
-        self.down_idx = [2, 4, 7, 14]
-
-        if dilate_scale == 8:
-            for i in range(self.down_idx[-2], self.down_idx[-1]):
-                self.features[i].apply(
-                    partial(self._nostride_dilate, dilate=2)
-                )
-            for i in range(self.down_idx[-1], self.total_idx):
-                self.features[i].apply(
-                    partial(self._nostride_dilate, dilate=4)
-                )
-        elif dilate_scale == 16:
-            for i in range(self.down_idx[-1], self.total_idx):
-                self.features[i].apply(
-                    partial(self._nostride_dilate, dilate=2)
-                )
-
-    def _nostride_dilate(self, m, dilate):
-        classname = m.__class__.__name__
-        if classname.find('Conv') != -1:
-            # the convolution with stride
-            if m.stride == (2, 2):
-                m.stride = (1, 1)
-                if m.kernel_size == (3, 3):
-                    m.dilation = (dilate//2, dilate//2)
-                    m.padding = (dilate//2, dilate//2)
-            # other convoluions
-            else:
-                if m.kernel_size == (3, 3):
-                    m.dilation = (dilate, dilate)
-                    m.padding = (dilate, dilate)
-
-    def forward(self, x, return_feature_maps=False):
-        if return_feature_maps:
-            conv_out = []
-            for i in range(self.total_idx):
-                x = self.features[i](x)
-                if i in self.down_idx:
-                    conv_out.append(x)
-            conv_out.append(x)
-            return conv_out
-
-        else:
-            return [self.features(x)]
-
-
-# last conv, deep supervision
-class C1DeepSup(nn.Module):
-    def __init__(self, num_class=150, fc_dim=2048, use_softmax=False):
-        super(C1DeepSup, self).__init__()
-        self.use_softmax = use_softmax
-
-        self.cbr = conv3x3_bn_relu(fc_dim, fc_dim // 4, 1)
-        self.cbr_deepsup = conv3x3_bn_relu(fc_dim // 2, fc_dim // 4, 1)
-
-        # last conv
-        self.conv_last = nn.Conv2d(fc_dim // 4, num_class, 1, 1, 0)
-        self.conv_last_deepsup = nn.Conv2d(fc_dim // 4, num_class, 1, 1, 0)
-
-    def forward(self, conv_out, segSize=None):
-        conv5 = conv_out[-1]
-
-        x = self.cbr(conv5)
-        x = self.conv_last(x)
-
-        if self.use_softmax:  # is True during inference
-            x = nn.functional.interpolate(
-                x, size=segSize, mode='bilinear', align_corners=False)
-            x = nn.functional.softmax(x, dim=1)
-            return x
-
-        # deep sup
-        conv4 = conv_out[-2]
-        _ = self.cbr_deepsup(conv4)
-        _ = self.conv_last_deepsup(_)
-
-        x = nn.functional.log_softmax(x, dim=1)
-        _ = nn.functional.log_softmax(_, dim=1)
-
-        return (x, _)
-
-# last conv
-class C1(nn.Module):
-    def __init__(self, num_class=150, fc_dim=2048, use_softmax=False):
-        super(C1, self).__init__()
-        self.use_softmax = use_softmax
-
-        self.cbr = conv3x3_bn_relu(fc_dim, fc_dim // 4, 1)
-
-        # last conv
-        self.conv_last = nn.Conv2d(fc_dim // 4, num_class, 1, 1, 0)
-
-    # def print_decoder_grad_check(self, grad):
-    #     # print('decoder_grad:', grad.data)
-    #     print('decoder_grad max:', torch.max(grad.data))
-
-    def forward(self, conv_out, segSize=None, res=None):
-        conv5 = conv_out[-1]
-        # print('debug check got here - deconv? \n')
-        # if not self.use_softmax:
-        #     conv5.register_hook(self.print_decoder_grad_check)
-        x = self.cbr(conv5)
-        x = self.conv_last(x)
-        if res is not None:
-            x += res
-
-        if self.use_softmax: # is True during inference
-            x = nn.functional.interpolate(
-                x, size=segSize, mode='bilinear', align_corners=False)
-            x = nn.functional.softmax(x, dim=1)
-        else:
-            x = nn.functional.log_softmax(x, dim=1)
-
-        return x
-
-# pyramid pooling
-class PPM(nn.Module):
-    def __init__(self, num_class=150, fc_dim=4096,
-                 use_softmax=False, pool_scales=(1, 2, 3, 6)):
-        super(PPM, self).__init__()
-        self.use_softmax = use_softmax
-
-        self.ppm = []
-        for scale in pool_scales:
-            self.ppm.append(nn.Sequential(
-                nn.AdaptiveAvgPool2d(scale),
-                nn.Conv2d(fc_dim, 512, kernel_size=1, bias=False),
-                BatchNorm2d(512),
-                nn.ReLU(inplace=True)
-            ))
-        self.ppm = nn.ModuleList(self.ppm)
-
-        self.conv_last = nn.Sequential(
-            nn.Conv2d(fc_dim+len(pool_scales)*512, 512,
-                      kernel_size=3, padding=1, bias=False),
-            BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Dropout2d(0.1),
-            nn.Conv2d(512, num_class, kernel_size=1)
-        )
-
-    def forward(self, conv_out, segSize=None):
-        conv5 = conv_out[-1]
-
-        input_size = conv5.size()
-        ppm_out = [conv5]
-        for pool_scale in self.ppm:
-            ppm_out.append(nn.functional.interpolate(
-                pool_scale(conv5),
-                (input_size[2], input_size[3]),
-                mode='bilinear', align_corners=False))
-        ppm_out = torch.cat(ppm_out, 1)
-
-        x = self.conv_last(ppm_out)
-
-        if self.use_softmax:  # is True during inference
-            x = nn.functional.interpolate(
-                x, size=segSize, mode='bilinear', align_corners=False)
-            x = nn.functional.softmax(x, dim=1)
-        else:
-            x = nn.functional.log_softmax(x, dim=1)
-        return x
-
-# pyramid pooling, deep supervision
-class PPMDeepsup(nn.Module):
-    def __init__(self, num_class=150, fc_dim=4096,
-                 use_softmax=False, pool_scales=(1, 2, 3, 6)):
-        super(PPMDeepsup, self).__init__()
-        self.use_softmax = use_softmax
-
-        self.ppm = []
-        for scale in pool_scales:
-            self.ppm.append(nn.Sequential(
-                nn.AdaptiveAvgPool2d(scale),
-                nn.Conv2d(fc_dim, 512, kernel_size=1, bias=False),
-                BatchNorm2d(512),
-                nn.ReLU(inplace=True)
-            ))
-        self.ppm = nn.ModuleList(self.ppm)
-        self.cbr_deepsup = conv3x3_bn_relu(fc_dim // 2, fc_dim // 4, 1)
-
-        self.conv_last = nn.Sequential(
-            nn.Conv2d(fc_dim+len(pool_scales)*512, 512,
-                      kernel_size=3, padding=1, bias=False),
-            BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Dropout2d(0.1),
-            nn.Conv2d(512, num_class, kernel_size=1)
-        )
-        self.conv_last_deepsup = nn.Conv2d(fc_dim // 4, num_class, 1, 1, 0)
-        self.dropout_deepsup = nn.Dropout2d(0.1)
-
-    def forward(self, conv_out, segSize=None):
-        conv5 = conv_out[-1]
-
-        input_size = conv5.size()
-        ppm_out = [conv5]
-        for pool_scale in self.ppm:
-            ppm_out.append(nn.functional.interpolate(
-                pool_scale(conv5),
-                (input_size[2], input_size[3]),
-                mode='bilinear', align_corners=False))
-        ppm_out = torch.cat(ppm_out, 1)
-
-        x = self.conv_last(ppm_out)
-
-        if self.use_softmax:  # is True during inference
-            x = nn.functional.interpolate(
-                x, size=segSize, mode='bilinear', align_corners=False)
-            x = nn.functional.softmax(x, dim=1)
-            return x
-
-        # deep sup
-        conv4 = conv_out[-2]
-        _ = self.cbr_deepsup(conv4)
-        _ = self.dropout_deepsup(_)
-        _ = self.conv_last_deepsup(_)
-
-        x = nn.functional.log_softmax(x, dim=1)
-        _ = nn.functional.log_softmax(_, dim=1)
-
-        return (x, _)
-
-# upernet
-class UPerNet(nn.Module):
-    def __init__(self, num_class=150, fc_dim=4096,
-                 use_softmax=False, pool_scales=(1, 2, 3, 6),
-                 fpn_inplanes=(256, 512, 1024, 2048), fpn_dim=256):
-        super(UPerNet, self).__init__()
-        self.use_softmax = use_softmax
-
-        # PPM Module
-        self.ppm_pooling = []
-        self.ppm_conv = []
-
-        for scale in pool_scales:
-            self.ppm_pooling.append(nn.AdaptiveAvgPool2d(scale))
-            self.ppm_conv.append(nn.Sequential(
-                nn.Conv2d(fc_dim, 512, kernel_size=1, bias=False),
-                BatchNorm2d(512),
-                nn.ReLU(inplace=True)
-            ))
-        self.ppm_pooling = nn.ModuleList(self.ppm_pooling)
-        self.ppm_conv = nn.ModuleList(self.ppm_conv)
-        self.ppm_last_conv = conv3x3_bn_relu(fc_dim + len(pool_scales)*512, fpn_dim, 1)
-
-        # FPN Module
-        self.fpn_in = []
-        for fpn_inplane in fpn_inplanes[:-1]:   # skip the top layer
-            self.fpn_in.append(nn.Sequential(
-                nn.Conv2d(fpn_inplane, fpn_dim, kernel_size=1, bias=False),
-                BatchNorm2d(fpn_dim),
-                nn.ReLU(inplace=True)
-            ))
-        self.fpn_in = nn.ModuleList(self.fpn_in)
-
-        self.fpn_out = []
-        for i in range(len(fpn_inplanes) - 1):  # skip the top layer
-            self.fpn_out.append(nn.Sequential(
-                conv3x3_bn_relu(fpn_dim, fpn_dim, 1),
-            ))
-        self.fpn_out = nn.ModuleList(self.fpn_out)
-
-        self.conv_last = nn.Sequential(
-            conv3x3_bn_relu(len(fpn_inplanes) * fpn_dim, fpn_dim, 1),
-            nn.Conv2d(fpn_dim, num_class, kernel_size=1)
-        )
-
-    def forward(self, conv_out, segSize=None):
-        conv5 = conv_out[-1]
-
-        input_size = conv5.size()
-        ppm_out = [conv5]
-        for pool_scale, pool_conv in zip(self.ppm_pooling, self.ppm_conv):
-            ppm_out.append(pool_conv(nn.functional.interpolate(
-                pool_scale(conv5),
-                (input_size[2], input_size[3]),
-                mode='bilinear', align_corners=False)))
-        ppm_out = torch.cat(ppm_out, 1)
-        f = self.ppm_last_conv(ppm_out)
-
-        fpn_feature_list = [f]
-        for i in reversed(range(len(conv_out) - 1)):
-            conv_x = conv_out[i]
-            conv_x = self.fpn_in[i](conv_x) # lateral branch
-
-            f = nn.functional.interpolate(
-                f, size=conv_x.size()[2:], mode='bilinear', align_corners=False) # top-down branch
-            f = conv_x + f
-
-            fpn_feature_list.append(self.fpn_out[i](f))
-
-        fpn_feature_list.reverse() # [P2 - P5]
-        output_size = fpn_feature_list[0].size()[2:]
-        fusion_list = [fpn_feature_list[0]]
-        for i in range(1, len(fpn_feature_list)):
-            fusion_list.append(nn.functional.interpolate(
-                fpn_feature_list[i],
-                output_size,
-                mode='bilinear', align_corners=False))
-        fusion_out = torch.cat(fusion_list, 1)
-        x = self.conv_last(fusion_out)
-
-        if self.use_softmax:  # is True during inference
-            x = nn.functional.interpolate(
-                x, size=segSize, mode='bilinear', align_corners=False)
-            x = nn.functional.softmax(x, dim=1)
-            return x
-
-        x = nn.functional.log_softmax(x, dim=1)
-
-        return x

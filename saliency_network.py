@@ -309,104 +309,18 @@ class FovSimModule(nn.Module):
         self.fov_expand_1 = nn.Conv2d(in_channels=in_channels, out_channels=8*out_channels, kernel_size=3, padding=1, bias=False)
         self.fov_expand_2 = nn.Conv2d(in_channels=8*out_channels, out_channels=8*out_channels, kernel_size=3, padding=1, bias=False)
         self.fov_squeeze_1 = nn.Conv2d(in_channels=8*out_channels, out_channels=out_channels, kernel_size=3, padding=1, bias=False)
-
-        if cfg.MODEL.fov_normalise == 'instance':
-            self.norm1 = nn.InstanceNorm2d(8*out_channels, momentum=BN_MOMENTUM, affine=True)
-            self.norm2 = nn.InstanceNorm2d(8*out_channels, momentum=BN_MOMENTUM, affine=True)
-            self.norm3 = nn.InstanceNorm2d(out_channels, momentum=BN_MOMENTUM, affine=True)
-        else:
-            # bn
-            self.norm1 = BatchNorm2d(8*out_channels, momentum=BN_MOMENTUM)
-            self.norm2 = BatchNorm2d(8*out_channels, momentum=BN_MOMENTUM)
-            self.norm3 = BatchNorm2d(out_channels, momentum=BN_MOMENTUM)
-
-        if cfg.MODEL.fov_activation == 'relu':
-            self.act = nn.ReLU6(inplace=False)
-        elif cfg.MODEL.fov_activation == 'leaky_relu':
-            self.act = nn.LeakyReLU(inplace=False)
-
-
-        if self.cfg.MODEL.deep_fov == 'deep_fov1':
-            self.fov_expand_3 = nn.Conv2d(in_channels=8*out_channels, out_channels=8*out_channels, kernel_size=3, padding=1, bias=False)
-            self.fov_expand_4 = nn.Conv2d(in_channels=8*out_channels, out_channels=8*out_channels, kernel_size=3, padding=1, bias=False)
-        # self.requires_grad = True
-        if self.cfg.MODEL.deep_fov == 'deep_fov2':
-            self.fov_expand_2 = nn.Conv2d(in_channels=8*out_channels, out_channels=8*out_channels, kernel_size=5, padding=2, bias=False)
-            self.fov_squeeze_1 = nn.Conv2d(in_channels=8*out_channels, out_channels=out_channels, kernel_size=7, padding=3, bias=False)
-
-        # self.conv_last = nn.Conv2d(out_channels,1,kernel_size=1,padding=0,stride=1)
+        # bn
+        self.norm1 = BatchNorm2d(8*out_channels, momentum=BN_MOMENTUM)
+        self.norm2 = BatchNorm2d(8*out_channels, momentum=BN_MOMENTUM)
+        self.norm3 = BatchNorm2d(out_channels, momentum=BN_MOMENTUM)
+        self.act = nn.ReLU6(inplace=False)
 
     def forward(self, x, reset_grad=True, train_mode=True):
-        # TODO: F.softplus(Ci) / Sum(C[:])
-        if self.cfg.MODEL.deep_fov == 'deep_fov1':
-            output = self.norm3(self.fov_squeeze_1(self.act(self.fov_expand_4(self.act(self.fov_expand_3(self.act(self.norm2(self.fov_expand_2(self.act(self.norm1(self.fov_expand_1(x))))))))))))
-        else:
-            if self.cfg.MODEL.fov_normalise == 'no_normalise':
-                layer3 = self.fov_squeeze_1(self.act(self.fov_expand_2(self.act(self.fov_expand_1(x)))))
-            elif self.cfg.MODEL.fov_normalise == 'bn1':
-                layer3 = self.fov_squeeze_1(self.act(self.fov_expand_2(self.act(self.norm1(self.fov_expand_1(x))))))
-            else:
-                layer1 = self.act(self.norm1(self.fov_expand_1(x)))
-                layer2 = self.act(self.norm2(self.fov_expand_2(layer1)))
-                layer3 = self.norm3(self.fov_squeeze_1(layer2))
-            # output = self.conv_last(self.act(layer3))
-            output = layer3
+        layer1 = self.act(self.norm1(self.fov_expand_1(x)))
+        layer2 = self.act(self.norm2(self.fov_expand_2(layer1)))
+        layer3 = self.norm3(self.fov_squeeze_1(layer2))
+        output = layer3
         return output
-
-class FovSimModule_nonsyn(nn.Module):
-    def __init__(self, cfg, in_channels=3, out_channels=3):
-        # in_channels: num of channels corresponds to input image channels, e.g. 3
-        # out_channels: num of channels corresponds to num of sclaes tested
-        super(FovSimModule_nonsyn, self).__init__()
-        self.cfg = cfg
-        self.fov_expand_1 = nn.Conv2d(in_channels=in_channels, out_channels=8*out_channels, kernel_size=3, padding=1, bias=False)
-        self.fov_expand_2 = nn.Conv2d(in_channels=8*out_channels, out_channels=8*out_channels, kernel_size=3, padding=1, bias=False)
-        self.fov_squeeze_1 = nn.Conv2d(in_channels=8*out_channels, out_channels=out_channels, kernel_size=3, padding=1, bias=False)
-
-        if cfg.MODEL.fov_normalise == 'instance':
-            self.norm1 = nn.InstanceNorm2d(8*out_channels, track_running_stats=False, affine=True)
-            self.norm2 = nn.InstanceNorm2d(8*out_channels, track_running_stats=False, affine=True)
-            self.norm3 = nn.InstanceNorm2d(out_channels, track_running_stats=False, affine=True)
-        else:
-            # bn
-            self.norm1 = nn.BatchNorm2d(8*out_channels, track_running_stats=False)
-            self.norm2 = nn.BatchNorm2d(8*out_channels, track_running_stats=False)
-            self.norm3 = nn.BatchNorm2d(out_channels, track_running_stats=False)
-
-        if cfg.MODEL.fov_activation == 'relu':
-            self.act = nn.ReLU6(inplace=False)
-        elif cfg.MODEL.fov_activation == 'leaky_relu':
-            self.act = nn.LeakyReLU(inplace=False)
-
-
-        if self.cfg.MODEL.deep_fov == 'deep_fov1':
-            self.fov_expand_3 = nn.Conv2d(in_channels=8*out_channels, out_channels=8*out_channels, kernel_size=3, padding=1, bias=False)
-            self.fov_expand_4 = nn.Conv2d(in_channels=8*out_channels, out_channels=8*out_channels, kernel_size=3, padding=1, bias=False)
-        # self.requires_grad = True
-        if self.cfg.MODEL.deep_fov == 'deep_fov2':
-            self.fov_expand_2 = nn.Conv2d(in_channels=8*out_channels, out_channels=8*out_channels, kernel_size=5, padding=2, bias=False)
-            self.fov_squeeze_1 = nn.Conv2d(in_channels=8*out_channels, out_channels=out_channels, kernel_size=7, padding=3, bias=False)
-
-        # self.conv_last = nn.Conv2d(out_channels,1,kernel_size=1,padding=0,stride=1)
-
-    def forward(self, x, reset_grad=True, train_mode=True):
-        # TODO: F.softplus(Ci) / Sum(C[:])
-        if self.cfg.MODEL.deep_fov == 'deep_fov1':
-            output = self.norm3(self.fov_squeeze_1(self.act(self.fov_expand_4(self.act(self.fov_expand_3(self.act(self.norm2(self.fov_expand_2(self.act(self.norm1(self.fov_expand_1(x))))))))))))
-        else:
-            if self.cfg.MODEL.fov_normalise == 'no_normalise':
-                layer3 = self.fov_squeeze_1(self.act(self.fov_expand_2(self.act(self.fov_expand_1(x)))))
-            elif self.cfg.MODEL.fov_normalise == 'bn1':
-                layer3 = self.fov_squeeze_1(self.act(self.fov_expand_2(self.act(self.norm1(self.fov_expand_1(x))))))
-            else:
-                layer1 = self.act(self.norm1(self.fov_expand_1(x)))
-                layer2 = self.act(self.norm2(self.fov_expand_2(layer1)))
-                layer3 = self.norm3(self.fov_squeeze_1(layer2))
-            # output = self.conv_last(self.act(layer3))
-            output = layer3
-        return output
-
-
 
 def fov_simple(cfg, pretrained=False, in_channels=3, out_channels=24):
     """
@@ -416,15 +330,6 @@ def fov_simple(cfg, pretrained=False, in_channels=3, out_channels=24):
     if pretrained:
         pretrained_path = './pretrained/foveater_cityscape_soft_e100.pth'
         model.load_state_dict(torch.load(pretrained_path, map_location=lambda storage, loc: storage), strict=False)
-    return model
-
-def fov_simple_nonsyn(cfg, pretrained=False, in_channels=3, out_channels=24):
-    """
-    simple three layer CNN as used in foveation work
-    """
-    model = FovSimModule_nonsyn(cfg, in_channels=in_channels, out_channels=out_channels)
-    if pretrained:
-        model.load_state_dict('todo_pretrained_path', strict=False)
     return model
 
 def saliency_network_resnet18(pretrained=True, **kwargs):

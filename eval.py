@@ -23,7 +23,7 @@ from PIL import ImageFilter
 from scipy import ndimage
 from tqdm import tqdm
 
-from saliency_network import saliency_network_resnet18, saliency_network_resnet10_nonsyn, saliency_network_resnet18_nonsyn, fov_simple, fov_simple_nonsyn, saliency_network_resnet18_stride1
+from saliency_network import saliency_network_resnet18, saliency_network_resnet10_nonsyn, saliency_network_resnet18_nonsyn, fov_simple, saliency_network_resnet18_stride1
 
 colors = loadmat('data/color150.mat')['colors']
 
@@ -448,82 +448,6 @@ def eval_during_train_deform(cfg, writer=None, gpu=0, count=None):
             return mIoU, acc, mIoU_deformed, acc_deformed, mIoU_y_reverse, acc_y_reverse, relative_eval_y_ysample, ious
         else:
             return mIoU, acc, mIoU_deformed, acc_deformed, relative_eval_y_ysample, ious
-
-
-
-def eval_during_train(cfg, writer=None, gpu=0, count=None):
-    torch.cuda.set_device(gpu)
-
-    # Network Builders
-    # absolute paths of model weights
-    cfg.MODEL.weights_encoder = os.path.join(
-        cfg.DIR, 'encoder_' + cfg.VAL.checkpoint)
-    cfg.MODEL.weights_decoder = os.path.join(
-        cfg.DIR, 'decoder_' + cfg.VAL.checkpoint)
-    # load foveation weights
-    assert os.path.exists(cfg.MODEL.weights_encoder) and \
-        os.path.exists(cfg.MODEL.weights_decoder), "checkpoint does not exitst!"
-
-    net_encoder = ModelBuilder.build_encoder(
-        arch=cfg.MODEL.arch_encoder.lower(),
-        fc_dim=cfg.MODEL.fc_dim,
-        weights=cfg.MODEL.weights_encoder)
-    net_decoder = ModelBuilder.build_decoder(
-        arch=cfg.MODEL.arch_decoder.lower(),
-        fc_dim=cfg.MODEL.fc_dim,
-        num_class=cfg.DATASET.num_class,
-        weights=cfg.MODEL.weights_decoder,
-        use_softmax=True)
-
-
-    if 'CITYSCAPES' in cfg.DATASET.root_dataset:
-        if cfg.TRAIN.loss_fun == 'NLLLoss':
-            crit = nn.NLLLoss(ignore_index=19)
-        else:
-            crit = nn.CrossEntropyLoss(ignore_index=19)
-    elif 'Digest' in cfg.DATASET.root_dataset:
-        if cfg.TRAIN.loss_fun == 'NLLLoss':
-            crit = nn.NLLLoss(ignore_index=-2)
-        else:
-            crit = nn.CrossEntropyLoss(ignore_index=-2)
-    elif cfg.TRAIN.loss_fun == 'FocalLoss' and 'DeepGlob' in cfg.DATASET.root_dataset:
-        crit = FocalLoss(gamma=6, ignore_label=cfg.DATASET.ignore_index)
-    else:
-        if cfg.TRAIN.loss_fun == 'NLLLoss':
-            if cfg.DATASET.ignore_index != -2:
-                crit = nn.NLLLoss(ignore_index=cfg.DATASET.ignore_index)
-            else:
-                crit = nn.NLLLoss(ignore_index=-2)
-        else:
-            if cfg.DATASET.ignore_index != -2:
-                crit = nn.CrossEntropyLoss(ignore_index=cfg.DATASET.ignore_index)
-            else:
-                crit = nn.CrossEntropyLoss(ignore_index=-2)
-    segmentation_module = SegmentationModule(net_encoder, net_decoder, crit, cfg)
-
-    # Dataset and Loader
-    dataset_val = ValDataset(
-        cfg.DATASET.root_dataset,
-        cfg.DATASET.list_val,
-        cfg.DATASET,
-        cfg)
-    loader_val = torch.utils.data.DataLoader(
-        dataset_val,
-        batch_size=cfg.VAL.batch_size,
-        shuffle=False,
-        collate_fn=user_scattered_collate,
-        num_workers=5,
-        drop_last=True)
-
-    segmentation_module.cuda()
-
-
-    # Main loop
-    mIoU, acc = evaluate(segmentation_module, loader_val, cfg, gpu, writer=writer, count=count)
-
-
-    print('Evaluation Done!')
-    return mIoU, acc
 
 def main(cfg, gpu):
     torch.cuda.set_device(gpu)
