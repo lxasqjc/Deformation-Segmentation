@@ -47,6 +47,130 @@ def makeGaussian(size, fwhm = 3, center=None):
 
     return np.exp(-4*np.log(2) * ((x-x0)**2 + (y-y0)**2) / fwhm**2)
 
+def fillMissingValues_tensor(target_for_interp, copy=False, interp_mode='tri'):
+    """
+    fill missing values in a tenor
+
+    input shape: [num_classes, h, w]
+    output shape: [num_classes, h, w]
+    """
+
+    if copy:
+        target_for_interp = target_for_interp.clone()
+
+    def getPixelsForInterp(img):
+        """
+        Calculates a mask of pixels neighboring invalid values -
+           to use for interpolation.
+
+        input shape: [num_classes, h, w]
+        output shape: [num_classes, h, w]
+        """
+
+        invalid_mask = torch.isnan(img)
+        kernel = torch.tensor(cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), device=invalid_mask.device).unsqueeze(0).unsqueeze(0).expand(1,invalid_mask.shape[0],3,3).float()
+
+        #dilate to mark borders around invalid regions
+        if max(invalid_mask.shape) > 512:
+            dr = max(invalid_mask.shape)/512
+            input = invalid_mask.float().unsqueeze(0)
+            shape_ori = (invalid_mask.shape[-2], int(invalid_mask.shape[-1]))
+            shape_scaled = (int(invalid_mask.shape[-2]/dr), int(invalid_mask.shape[-1]/dr))
+            input_scaled = F.interpolate(input, shape_scaled, mode='nearest').squeeze(0)
+            invalid_mask_scaled = input_scaled.unsqueeze(0) # b,c,w,h
+
+            dilated_mask_scaled = torch.clamp(F.conv2d(invalid_mask_scaled, kernel, padding=(1, 1)), 0, 1)
+            dilated_mask_scaled_t = dilated_mask_scaled.float()
+            dilated_mask = F.interpolate(dilated_mask_scaled_t, shape_ori, mode='nearest').squeeze(0)
+        else:
+
+            dilated_mask = torch.clamp(F.conv2d(invalid_mask.float().unsqueeze(0),
+                                                kernel, padding=(1, 1)), 0, 1).squeeze(0)
+
+        # pixelwise "and" with valid pixel mask (~invalid_mask)
+        masked_for_interp = dilated_mask *  (~invalid_mask).float()
+        # Add 4 zeros corner points required for interp2d
+        masked_for_interp[:,0,0] *= 0
+        masked_for_interp[:,0,-1] *= 0
+        masked_for_interp[:,-1,0] *= 0
+        masked_for_interp[:,-1,-1] *= 0
+        masked_for_interp[:,0,0] += 1
+        masked_for_interp[:,0,-1] += 1
+        masked_for_interp[:,-1,0] += 1
+        masked_for_interp[:,-1,-1] += 1
+
+        return masked_for_interp.bool(), invalid_mask
+
+    def getPixelsForInterp_NB(img):
+        """
+        Calculates a mask of pixels neighboring invalid values -
+           to use for interpolation.
+        """
+        # mask invalid pixels
+        invalid_mask = np.isnan(img)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+
+        #dilate to mark borders around invalid regions
+        if max(invalid_mask.shape) > 512:
+            dr = max(invalid_mask.shape)/512
+            input = torch.tensor(invalid_mask.astype('float')).unsqueeze(0)
+            shape_ori = (invalid_mask.shape[-2], int(invalid_mask.shape[-1]))
+            shape_scaled = (int(invalid_mask.shape[-2]/dr), int(invalid_mask.shape[-1]/dr))
+            input_scaled = F.interpolate(input, shape_scaled, mode='nearest').squeeze(0)
+            invalid_mask_scaled = np.array(input_scaled).astype('bool')
+            dilated_mask_scaled = cv2.dilate(invalid_mask_scaled.astype('uint8'), kernel,
+                              borderType=cv2.BORDER_CONSTANT, borderValue=int(0))
+            dilated_mask_scaled_t = torch.tensor(dilated_mask_scaled.astype('float')).unsqueeze(0)
+            dilated_mask = F.interpolate(dilated_mask_scaled_t, shape_ori, mode='nearest').squeeze(0)
+            dilated_mask = np.array(dilated_mask).astype('uint8')
+        else:
+            dilated_mask = cv2.dilate(invalid_mask.astype('uint8'), kernel,
+                              borderType=cv2.BORDER_CONSTANT, borderValue=int(0))
+
+        # pixelwise "and" with valid pixel mask (~invalid_mask)
+        masked_for_interp = dilated_mask *  ~invalid_mask
+        return masked_for_interp.astype('bool'), invalid_mask
+
+    # Mask pixels for interpolation
+    if interp_mode == 'nearest':
+        interpolator=scipy.interpolate.NearestNDInterpolator
+        mask_for_interp, invalid_mask = getPixelsForInterp_NB(target_for_interp)
+    elif interp_mode == 'BI':
+        interpolator=scipy.interpolate.LinearNDInterpolator
+        mask_for_interp, invalid_mask = getPixelsForInterp_NB(target_for_interp)
+    else:
+        interpolator=Interp2D(target_for_interp.shape[-2], target_for_interp.shape[-1])
+        mask_for_interp, invalid_mask = getPixelsForInterp(target_for_interp)
+        if invalid_mask.float().sum() == 0:
+            return target_for_interp
+
+    if interp_mode == 'nearest' or interp_mode == 'BI':
+        points = np.argwhere(mask_for_interp)
+        values = target_for_interp[mask_for_interp]
+    else:
+        points = torch.where(mask_for_interp[0]) # tuple of 2 for (h, w) indices
+        points = torch.cat([t.unsqueeze(0) for t in points]) # [2, number_of_points]
+        points = points.permute(1,0) # shape: [number_of_points, 2]
+        values = target_for_interp.clone()[mask_for_interp].view(mask_for_interp.shape[0],-1).permute(1,0) # shape: [number_of_points, num_classes]
+    interp = interpolator(points, values) # return [num_classes, h, w]
+
+    if interp_mode == 'nearest' or interp_mode == 'BI':
+        target_for_interp[invalid_mask] = interp(np.argwhere(np.array(invalid_mask)))
+    else:
+        if not (interp.shape == target_for_interp.shape == invalid_mask.shape and interp.device == target_for_interp.device == invalid_mask.device):
+            print('SHAPE: interp={}; target_for_interp={}; invalid_mask={}\n'.format(interp.shape, target_for_interp.shape, invalid_mask.shape))
+            print('DEVICE: interp={}; target_for_interp={}; invalid_mask={}\n'.format(interp.device, target_for_interp.device, invalid_mask.device))
+        try:
+            target_for_interp[invalid_mask] = interp[torch.where(invalid_mask)].clone()
+        except:
+            print('interp: {}\n'.format(interp))
+            print('invalid_mask: {}\n'.format(invalid_mask))
+            print('target_for_interp: {}\n'.format(target_for_interp))
+        else:
+            pass
+    return target_for_interp
+
+
 class CompressNet(nn.Module):
     def __init__(self, cfg):
         super(CompressNet, self).__init__()
@@ -169,127 +293,6 @@ class DeformSegmentationModule(SegmentationModuleBase):
             for i in range(self.global_size_x):
                 for j in range(self.global_size_y):
                     self.P_basis[k,i,j] = k*(i-self.padding_size_x)/(self.grid_size_x-1.0)+(1.0-k)*(j-self.padding_size_y)/(self.grid_size_y-1.0)
-
-    def fillMissingValues_tensor(self, target_for_interp, copy=False, interp_mode='tri'):
-        """
-        fill missing values in a tenor
-
-        input shape: [num_classes, h, w]
-        output shape: [num_classes, h, w]
-        """
-
-        if copy:
-            target_for_interp = target_for_interp.clone()
-
-        def getPixelsForInterp(img):
-            """
-            Calculates a mask of pixels neighboring invalid values -
-               to use for interpolation.
-
-            input shape: [num_classes, h, w]
-            output shape: [num_classes, h, w]
-            """
-            invalid_mask = torch.isnan(img)
-            kernel = torch.tensor(cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), device=invalid_mask.device).unsqueeze(0).unsqueeze(0).expand(1,invalid_mask.shape[0],3,3).float()
-
-            #dilate to mark borders around invalid regions
-            if max(invalid_mask.shape) > 512:
-                dr = max(invalid_mask.shape)/512
-                input = invalid_mask.float().unsqueeze(0)
-                shape_ori = (invalid_mask.shape[-2], int(invalid_mask.shape[-1]))
-                shape_scaled = (int(invalid_mask.shape[-2]/dr), int(invalid_mask.shape[-1]/dr))
-                input_scaled = F.interpolate(input, shape_scaled, mode='nearest').squeeze(0)
-                invalid_mask_scaled = input_scaled.unsqueeze(0) # b,c,w,h
-                dilated_mask_scaled = torch.clamp(F.conv2d(invalid_mask_scaled, kernel, padding=(1, 1)), 0, 1)
-                dilated_mask_scaled_t = dilated_mask_scaled.float()
-                dilated_mask = F.interpolate(dilated_mask_scaled_t, shape_ori, mode='nearest').squeeze(0)
-            else:
-                dilated_mask = torch.clamp(F.conv2d(invalid_mask.float().unsqueeze(0),
-                                                    kernel, padding=(1, 1)), 0, 1).squeeze(0)
-            # pixelwise "and" with valid pixel mask (~invalid_mask)
-            masked_for_interp = dilated_mask *  (~invalid_mask).float()
-            # Add 4 zeros corner points required for interp2d
-            masked_for_interp[:,0,0] *= 0
-            masked_for_interp[:,0,-1] *= 0
-            masked_for_interp[:,-1,0] *= 0
-            masked_for_interp[:,-1,-1] *= 0
-            masked_for_interp[:,0,0] += 1
-            masked_for_interp[:,0,-1] += 1
-            masked_for_interp[:,-1,0] += 1
-            masked_for_interp[:,-1,-1] += 1
-
-            return masked_for_interp.bool(), invalid_mask
-
-        def getPixelsForInterp_NB(img):
-            """
-            Calculates a mask of pixels neighboring invalid values -
-               to use for interpolation.
-            """
-            invalid_mask = np.isnan(img)
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-            #dilate to mark borders around invalid regions
-            if max(invalid_mask.shape) > 512:
-                dr = max(invalid_mask.shape)/512
-                input = torch.tensor(invalid_mask.astype('float')).unsqueeze(0)
-                shape_ori = (invalid_mask.shape[-2], int(invalid_mask.shape[-1]))
-                shape_scaled = (int(invalid_mask.shape[-2]/dr), int(invalid_mask.shape[-1]/dr))
-                # print('input shape: {}\n'.format(input.shape))
-                input_scaled = F.interpolate(input, shape_scaled, mode='nearest').squeeze(0)
-                invalid_mask_scaled = np.array(input_scaled).astype('bool')
-
-                dilated_mask_scaled = cv2.dilate(invalid_mask_scaled.astype('uint8'), kernel,
-                                  borderType=cv2.BORDER_CONSTANT, borderValue=int(0))
-
-                dilated_mask_scaled_t = torch.tensor(dilated_mask_scaled.astype('float')).unsqueeze(0)
-                dilated_mask = F.interpolate(dilated_mask_scaled_t, shape_ori, mode='nearest').squeeze(0)
-                dilated_mask = np.array(dilated_mask).astype('uint8')
-            else:
-                dilated_mask = cv2.dilate(invalid_mask.astype('uint8'), kernel,
-                                  borderType=cv2.BORDER_CONSTANT, borderValue=int(0))
-            # pixelwise "and" with valid pixel mask (~invalid_mask)
-            masked_for_interp = dilated_mask *  ~invalid_mask
-            return masked_for_interp.astype('bool'), invalid_mask
-
-        # Mask pixels for interpolation
-        if interp_mode == 'nearest':
-            interpolator=scipy.interpolate.NearestNDInterpolator
-            mask_for_interp, invalid_mask = getPixelsForInterp_NB(target_for_interp)
-        elif interp_mode == 'BI':
-            interpolator=scipy.interpolate.LinearNDInterpolator
-            mask_for_interp, invalid_mask = getPixelsForInterp_NB(target_for_interp)
-        else:
-            interpolator=Interp2D(target_for_interp.shape[-2], target_for_interp.shape[-1])
-            mask_for_interp, invalid_mask = getPixelsForInterp(target_for_interp)
-            if invalid_mask.float().sum() == 0:
-                return target_for_interp
-
-        if interp_mode == 'nearest' or interp_mode == 'BI':
-            points = np.argwhere(mask_for_interp)
-            values = target_for_interp[mask_for_interp]
-        else:
-            # Interpolate only holes, only using these pixels
-            # missing locations should be same for all classes (first dim)
-            points = torch.where(mask_for_interp[0])
-            points = torch.cat([t.unsqueeze(0) for t in points])
-            points = points.permute(1,0)
-            values = target_for_interp.clone()[mask_for_interp].view(mask_for_interp.shape[0],-1).permute(1,0) # shape: [number_of_points, num_classes]
-        interp = interpolator(points, values)
-
-        if interp_mode == 'nearest' or interp_mode == 'BI':
-            target_for_interp[invalid_mask] = interp(np.argwhere(np.array(invalid_mask)))
-        else:
-            if not (interp.shape == target_for_interp.shape == invalid_mask.shape and interp.device == target_for_interp.device == invalid_mask.device):
-                print('SHAPE: interp={}; target_for_interp={}; invalid_mask={}\n'.format(interp.shape, target_for_interp.shape, invalid_mask.shape))
-                print('DEVICE: interp={}; target_for_interp={}; invalid_mask={}\n'.format(interp.device, target_for_interp.device, invalid_mask.device))
-            try:
-                target_for_interp[invalid_mask] = interp[torch.where(invalid_mask)].clone()
-            except:
-                print('interp: {}\n'.format(interp))
-                print('invalid_mask: {}\n'.format(invalid_mask))
-                print('target_for_interp: {}\n'.format(target_for_interp))
-            else:
-                pass
-        return target_for_interp
 
     def create_grid(self, x, segSize=None, x_inv=None):
         P = torch.autograd.Variable(torch.zeros(1,2,self.grid_size_x+2*self.padding_size_x, self.grid_size_y+2*self.padding_size_y, device=x.device),requires_grad=False)
@@ -582,7 +585,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
                 y_sampled_score_reverse[unfilled_mask_2d.unsqueeze(1).expand(y_sampled_score_reverse.shape)] = float('nan')
 
                 for n in range(y_sampled_score_reverse.shape[0]):
-                    y_sampled_score_reverse[n] = self.fillMissingValues_tensor(y_sampled_score_reverse[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
+                    y_sampled_score_reverse[n] = fillMissingValues_tensor(y_sampled_score_reverse[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
 
                 mask = torch.isnan(y_sampled_score_reverse)
                 y_sampled_score_reverse = y_sampled_score_reverse.clone().masked_fill_(mask.eq(1), 0.0)
@@ -637,7 +640,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
                     pred_sampled_train = F.grid_sample(x, grid_inv_train.float())
                     pred_sampled_train[unfilled_mask_2d.unsqueeze(1).expand(pred_sampled_train.shape)] = float('nan')
                     for n in range(pred_sampled_train.shape[0]):
-                        pred_sampled_train[n] = self.fillMissingValues_tensor(pred_sampled_train[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
+                        pred_sampled_train[n] = fillMissingValues_tensor(pred_sampled_train[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
 
             if self.deep_sup_scale is not None: # use deep supervision technique
                 pred, pred_deepsup = pred, pred_deepsup
@@ -756,128 +759,6 @@ class DeformSegmentationModule(SegmentationModuleBase):
                         x_sampled_reverse =  nn.Upsample(size=segSize, mode='bilinear')(x_sampled_unorm)
 
                 elif self.cfg.MODEL.rev_deform_opt == 51:
-                    def fillMissingValues_tensor(target_for_interp, copy=False, interp_mode='tri'):
-                        """
-                        fill missing values in a tenor
-
-                        input shape: [num_classes, h, w]
-                        output shape: [num_classes, h, w]
-                        """
-
-                        if copy:
-                            target_for_interp = target_for_interp.clone()
-
-                        def getPixelsForInterp(img):
-                            """
-                            Calculates a mask of pixels neighboring invalid values -
-                               to use for interpolation.
-
-                            input shape: [num_classes, h, w]
-                            output shape: [num_classes, h, w]
-                            """
-
-                            invalid_mask = torch.isnan(img)
-                            kernel = torch.tensor(cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), device=invalid_mask.device).unsqueeze(0).unsqueeze(0).expand(1,invalid_mask.shape[0],3,3).float()
-
-                            #dilate to mark borders around invalid regions
-                            if max(invalid_mask.shape) > 512:
-                                dr = max(invalid_mask.shape)/512
-                                input = invalid_mask.float().unsqueeze(0)
-                                shape_ori = (invalid_mask.shape[-2], int(invalid_mask.shape[-1]))
-                                shape_scaled = (int(invalid_mask.shape[-2]/dr), int(invalid_mask.shape[-1]/dr))
-                                input_scaled = F.interpolate(input, shape_scaled, mode='nearest').squeeze(0)
-                                invalid_mask_scaled = input_scaled.unsqueeze(0) # b,c,w,h
-
-                                dilated_mask_scaled = torch.clamp(F.conv2d(invalid_mask_scaled, kernel, padding=(1, 1)), 0, 1)
-                                dilated_mask_scaled_t = dilated_mask_scaled.float()
-                                dilated_mask = F.interpolate(dilated_mask_scaled_t, shape_ori, mode='nearest').squeeze(0)
-                            else:
-
-                                dilated_mask = torch.clamp(F.conv2d(invalid_mask.float().unsqueeze(0),
-                                                                    kernel, padding=(1, 1)), 0, 1).squeeze(0)
-
-                            # pixelwise "and" with valid pixel mask (~invalid_mask)
-                            masked_for_interp = dilated_mask *  (~invalid_mask).float()
-                            # Add 4 zeros corner points required for interp2d
-                            masked_for_interp[:,0,0] *= 0
-                            masked_for_interp[:,0,-1] *= 0
-                            masked_for_interp[:,-1,0] *= 0
-                            masked_for_interp[:,-1,-1] *= 0
-                            masked_for_interp[:,0,0] += 1
-                            masked_for_interp[:,0,-1] += 1
-                            masked_for_interp[:,-1,0] += 1
-                            masked_for_interp[:,-1,-1] += 1
-
-                            return masked_for_interp.bool(), invalid_mask
-
-                        def getPixelsForInterp_NB(img):
-                            """
-                            Calculates a mask of pixels neighboring invalid values -
-                               to use for interpolation.
-                            """
-                            # mask invalid pixels
-                            invalid_mask = np.isnan(img)
-                            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-
-                            #dilate to mark borders around invalid regions
-                            if max(invalid_mask.shape) > 512:
-                                dr = max(invalid_mask.shape)/512
-                                input = torch.tensor(invalid_mask.astype('float')).unsqueeze(0)
-                                shape_ori = (invalid_mask.shape[-2], int(invalid_mask.shape[-1]))
-                                shape_scaled = (int(invalid_mask.shape[-2]/dr), int(invalid_mask.shape[-1]/dr))
-                                input_scaled = F.interpolate(input, shape_scaled, mode='nearest').squeeze(0)
-                                invalid_mask_scaled = np.array(input_scaled).astype('bool')
-                                dilated_mask_scaled = cv2.dilate(invalid_mask_scaled.astype('uint8'), kernel,
-                                                  borderType=cv2.BORDER_CONSTANT, borderValue=int(0))
-                                dilated_mask_scaled_t = torch.tensor(dilated_mask_scaled.astype('float')).unsqueeze(0)
-                                dilated_mask = F.interpolate(dilated_mask_scaled_t, shape_ori, mode='nearest').squeeze(0)
-                                dilated_mask = np.array(dilated_mask).astype('uint8')
-                            else:
-                                dilated_mask = cv2.dilate(invalid_mask.astype('uint8'), kernel,
-                                                  borderType=cv2.BORDER_CONSTANT, borderValue=int(0))
-
-                            # pixelwise "and" with valid pixel mask (~invalid_mask)
-                            masked_for_interp = dilated_mask *  ~invalid_mask
-                            return masked_for_interp.astype('bool'), invalid_mask
-
-                        # Mask pixels for interpolation
-                        if interp_mode == 'nearest':
-                            interpolator=scipy.interpolate.NearestNDInterpolator
-                            mask_for_interp, invalid_mask = getPixelsForInterp_NB(target_for_interp)
-                        elif interp_mode == 'BI':
-                            interpolator=scipy.interpolate.LinearNDInterpolator
-                            mask_for_interp, invalid_mask = getPixelsForInterp_NB(target_for_interp)
-                        else:
-                            interpolator=Interp2D(target_for_interp.shape[-2], target_for_interp.shape[-1])
-                            mask_for_interp, invalid_mask = getPixelsForInterp(target_for_interp)
-                            if invalid_mask.float().sum() == 0:
-                                return target_for_interp
-
-                        if interp_mode == 'nearest' or interp_mode == 'BI':
-                            points = np.argwhere(mask_for_interp)
-                            values = target_for_interp[mask_for_interp]
-                        else:
-                            points = torch.where(mask_for_interp[0]) # tuple of 2 for (h, w) indices
-                            points = torch.cat([t.unsqueeze(0) for t in points]) # [2, number_of_points]
-                            points = points.permute(1,0) # shape: [number_of_points, 2]
-                            values = target_for_interp.clone()[mask_for_interp].view(mask_for_interp.shape[0],-1).permute(1,0) # shape: [number_of_points, num_classes]
-                        interp = interpolator(points, values) # return [num_classes, h, w]
-
-                        if interp_mode == 'nearest' or interp_mode == 'BI':
-                            target_for_interp[invalid_mask] = interp(np.argwhere(np.array(invalid_mask)))
-                        else:
-                            if not (interp.shape == target_for_interp.shape == invalid_mask.shape and interp.device == target_for_interp.device == invalid_mask.device):
-                                print('SHAPE: interp={}; target_for_interp={}; invalid_mask={}\n'.format(interp.shape, target_for_interp.shape, invalid_mask.shape))
-                                print('DEVICE: interp={}; target_for_interp={}; invalid_mask={}\n'.format(interp.device, target_for_interp.device, invalid_mask.device))
-                            try:
-                                target_for_interp[invalid_mask] = interp[torch.where(invalid_mask)].clone()
-                            except:
-                                print('interp: {}\n'.format(interp))
-                                print('invalid_mask: {}\n'.format(invalid_mask))
-                                print('target_for_interp: {}\n'.format(target_for_interp))
-                            else:
-                                pass
-                        return target_for_interp
                     pred_sampled_unfilled_mask_2d = torch.isnan(grid_inv[:,:,:,0])
                     grid_inv[torch.isnan(grid_inv)] = 0
                     pred_sampled = F.grid_sample(x, grid_inv.float())
@@ -955,9 +836,9 @@ class DeformSegmentationModule(SegmentationModuleBase):
                             y_sampled_score_reverse = F.grid_sample(y_sampled_score, grid_inv.float())
                             y_sampled_score_reverse[pred_sampled_unfilled_mask_2d.unsqueeze(1).expand(y_sampled_score_reverse.shape)] = float('nan')
                             for n in range(y_sampled_score_reverse.shape[0]):
-                                y_sampled_score_reverse[n] = self.fillMissingValues_tensor(y_sampled_score_reverse[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
+                                y_sampled_score_reverse[n] = fillMissingValues_tensor(y_sampled_score_reverse[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
                             _, y_sampled_reverse = torch.max(y_sampled_score_reverse, dim=1)
-                    del fillMissingValues_tensor
+                    
                 ## FILL residual missing
                 if feed_batch_count != None and not 'single' in self.cfg.DATASET.list_train:
                     if feed_batch_count < self.cfg.VAL.batch_size:
