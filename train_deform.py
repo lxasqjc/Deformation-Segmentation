@@ -19,16 +19,14 @@ from torch.utils.tensorboard import SummaryWriter
 from scipy.stats import entropy
 # Our libs
 from config import cfg
-from dataset import TrainDataset, imresize, b_imresize #, ValDataset
-from models import ModelBuilder, SegmentationModule, FovSegmentationModule, SegmentationModule_plain, SegmentationModule_fov_deform, DeformSegmentationModule
+from dataset import TrainDataset #, ValDataset
+from models import ModelBuilder, SegmentationModule, DeformSegmentationModule
 from utils import AverageMeter, parse_devices, setup_logger
 from lib.nn import UserScatteredDataParallel, user_scattered_collate, patch_replication_callback
 from eval import eval_during_train_deform, eval_during_train
-from eval_multipro import eval_during_train_multipro
 from criterion import OhemCrossEntropy, DiceCoeff, FocalLoss
 from pytorch_toolbelt.losses.dice import DiceLoss
 
-from saliency_network import saliency_network_resnet18, saliency_network_resnet18_nonsyn, saliency_network_resnet10_nonsyn, fov_simple, fov_simple_nonsyn
 # import wandb
 
 
@@ -58,18 +56,6 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
         else:
             single_gpu_mode = False
 
-        if cfg.DATASET.check_dataload and i == 0:
-            aug_img = batch_data[0]['img_data'][0].unsqueeze(0)
-            print('aug_img shape:{}'.format(aug_img.shape))
-            aug_img = vutils.make_grid(aug_img, normalize=True, scale_each=True)
-            writer.add_image('train/aug_img', aug_img, epoch)
-
-            img_ori = batch_data[0]['img_ori'].unsqueeze(0)
-            print('img_ori shape:{}'.format(img_ori.shape))
-            img_ori = vutils.make_grid(img_ori, normalize=True, scale_each=True)
-            writer.add_image('train/img_ori', img_ori, epoch)
-
-
         data_time.update(time.time() - tic)
         segmentation_module.zero_grad()
 
@@ -77,40 +63,18 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
         cur_iter = i + (epoch - 1) * cfg.TRAIN.epoch_iters
         if cfg.MODEL.fov_deform:
             adjust_learning_rate(optimizers, cur_iter, cfg, epoch=epoch)
-
             if cfg.TRAIN.stage_adjust_edge_loss != 1.0 and epoch >= cfg.TRAIN.adjust_edge_loss_start_epoch and epoch <= cfg.TRAIN.adjust_edge_loss_end_epoch:
                 cfg.TRAIN.edge_loss_scale = cfg.TRAIN.stage_adjust_edge_loss
                 print('stage adjusted edge_loss_scale: ', cfg.TRAIN.edge_loss_scale)
             elif cfg.TRAIN.fixed_edge_loss_scale > 0.0:
                 adjust_edge_loss_scale(cur_iter, cfg)
-
         else:
             adjust_learning_rate(optimizers, cur_iter, cfg)
 
         print_grad = None
-
         if cfg.MODEL.fov_deform:
             if single_gpu_mode:
                 loss, acc, _ = segmentation_module(batch_data[0], writer=writer, count=cur_iter, epoch=epoch)
-            elif 'single' in cfg.DATASET.list_train:
-                if cfg.TRAIN.deform_joint_loss:
-                    loss, acc, y_print, y_sampled, edge_loss = segmentation_module(batch_data)
-                else:
-                    loss, acc, y_print, y_sampled = segmentation_module(batch_data)
-                y_print = y_print[0]
-                y_sampled = y_sampled[0]
-                colors = loadmat('data/color150.mat')['colors']
-                y_color = colorEncode(as_numpy(y_print), colors)
-                y_print = torch.from_numpy(y_color.astype(np.uint8)).unsqueeze(0).permute(0,3,1,2)
-                y_print = vutils.make_grid(y_print, normalize=False, scale_each=True)
-
-                if not cfg.MODEL.naive_upsample:
-                    y_sampled_color = colorEncode(as_numpy(y_sampled), colors)
-                    y_sampled_print = torch.from_numpy(y_sampled_color.astype(np.uint8)).unsqueeze(0).permute(0,3,1,2)
-                    y_sampled_print = vutils.make_grid(y_sampled_print, normalize=False, scale_each=True)
-
-                writer.add_image('train/Label Original', y_print, cur_iter)
-                writer.add_image('train/Deformed Label', y_sampled_print, cur_iter)
             else:
                 if cfg.TRAIN.opt_deform_LabelEdge and epoch >= cfg.TRAIN.fix_seg_start_epoch and epoch <= cfg.TRAIN.fix_seg_end_epoch:
                     loss, acc, edge_loss = segmentation_module(batch_data)
@@ -129,22 +93,12 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
                         cfg.MODEL.rev_deform_interp = 'nearest'
                         cfg.VAL.y_sampled_reverse = True
                 elif cfg.TRAIN.deform_joint_loss:
-                    if cfg.DATASET.check_dataload:
-                        loss, acc, edge_loss = segmentation_module(batch_data, writer=writer)
-                    else:
-                        loss, acc, edge_loss = segmentation_module(batch_data)
+                    loss, acc, edge_loss = segmentation_module(batch_data)
                 else:
                     loss, acc = segmentation_module(batch_data)
         else:
             if single_gpu_mode:
                 loss, acc = segmentation_module(batch_data[0], writer=writer, count=cur_iter)
-            elif 'single' in cfg.DATASET.list_train:
-                if cfg.TRAIN.deform_joint_loss:
-                    loss, acc, y_print, y_sampled_print, edge_loss = segmentation_module(batch_data)
-                else:
-                    loss, acc, y_print, y_sampled_print = segmentation_module(batch_data)
-                writer.add_image('train/Label Original', y_print, count)
-                writer.add_image('train/Deformed Label', y_sampled_print, count)
             else:
                 loss, acc = segmentation_module(batch_data)
         if loss is None and acc is None:
@@ -380,10 +334,6 @@ def create_optimizers(nets, cfg):
     else:
         return (optimizer_encoder, optimizer_decoder)
 
-def adjust_gms_tau(cur_iter, cfg, r=1e5):
-    cfg.MODEL.gumbel_tau = max(0.1, float(np.exp(-1.*r*float(cur_iter))))
-    print('adjusted_tau: ', cfg.MODEL.gumbel_tau)
-
 
 def adjust_edge_loss_scale(cur_iter, cfg):
     scale_running_el = ((1. - float(cur_iter) / cfg.TRAIN.max_iters) ** cfg.TRAIN.edge_loss_pow)
@@ -457,7 +407,7 @@ def adjust_learning_rate(optimizers, cur_iter, cfg, lr_mbs = False, f_max_iter=1
 
 def main(cfg, gpus):
     ###============== DEFINE LOSSES ===========###
-    if cfg.DATASET.root_dataset == '/scratch0/chenjin/GLEASON2019_DATA/Data/':
+    if 'GLEASON2019_DATA' in cfg.DATASET.root_dataset:
         if cfg.TRAIN.loss_fun == 'DiceLoss':
             crit = DiceLoss('multiclass')
         elif cfg.TRAIN.loss_fun == 'FocalLoss':
@@ -661,9 +611,7 @@ def main(cfg, gpus):
 
         ## eval during train
         if (epoch+1) % cfg.TRAIN.eval_per_epoch == 0:
-            if cfg.VAL.multipro:
-                val_iou, val_acc = eval_during_train_multipro(cfg, gpus)
-            elif not cfg.MODEL.fov_deform:
+            if not cfg.MODEL.fov_deform:
                 val_iou, val_acc = eval_during_train(cfg, gpus)
             else:
                 if cfg.VAL.dice:

@@ -12,8 +12,8 @@ from scipy.io import loadmat
 import pandas as pd
 # Our libs
 from config import cfg
-from dataset import ValDataset, imresize, b_imresize, patch_loader
-from models import ModelBuilder, SegmentationModule, SegmentationModule_plain, SegmentationModule_fov_deform, FovSegmentationModule, DeformSegmentationModule
+from dataset import ValDataset, imresize, b_imresize
+from models import ModelBuilder, SegmentationModule, DeformSegmentationModule
 from utils import AverageMeter, colorEncode, accuracy, intersectionAndUnion, setup_logger
 from criterion import OhemCrossEntropy, DiceCoeff, DiceLoss, FocalLoss
 from lib.nn import user_scattered_collate, async_copy_to
@@ -24,7 +24,6 @@ from scipy import ndimage
 from tqdm import tqdm
 
 from saliency_network import saliency_network_resnet18, saliency_network_resnet10_nonsyn, saliency_network_resnet18_nonsyn, fov_simple, fov_simple_nonsyn, saliency_network_resnet18_stride1
-# from saliency_sampler import Saliency_Sampler
 
 colors = loadmat('data/color150.mat')['colors']
 
@@ -73,18 +72,6 @@ def visualize_result(data, pred, dir_result):
     img_name = info.split('/')[-1]
     Image.fromarray(im_vis).save(os.path.join(dir_result, img_name.replace('.jpg', '.png')))
 
-def visualize_result_fov(data, foveated_expection, dir_result):
-    (img, F_Xlr, info) = data
-
-    # segmentation
-    F_Xlr_color = colorEncode(F_Xlr, colors)
-
-    # aggregate images and save
-    im_vis = np.concatenate((img, F_Xlr_color, foveated_expection),
-                            axis=1).astype(np.uint8)
-
-    img_name = info.split('/')[-1]
-    Image.fromarray(im_vis).save(os.path.join(dir_result, img_name.replace('.jpg', '.png')))
 
 def evaluate(segmentation_module, loader, cfg, gpu, foveation_module=None, writer=None, count=None):
     acc_meter = AverageMeter()
@@ -376,24 +363,20 @@ def eval_during_train_deform(cfg, writer=None, gpu=0, count=None):
         weights=cfg.MODEL.weights_decoder,
         use_softmax=True)
 
-    if cfg.MODEL.fov_deform:
-        # absolute paths of seg_deform weights
-        cfg.MODEL.weights_net_saliency = os.path.join(
-            cfg.DIR, 'saliency_' + cfg.VAL.checkpoint)
-        assert os.path.exists(cfg.MODEL.weights_net_saliency), "checkpoint does not exitst!"
-        net_saliency = ModelBuilder.build_net_saliency(
-            cfg=cfg,
-            weights=cfg.MODEL.weights_net_saliency)
+    # absolute paths of seg_deform weights
+    cfg.MODEL.weights_net_saliency = os.path.join(
+        cfg.DIR, 'saliency_' + cfg.VAL.checkpoint)
+    assert os.path.exists(cfg.MODEL.weights_net_saliency), "checkpoint does not exitst!"
+    net_saliency = ModelBuilder.build_net_saliency(
+        cfg=cfg,
+        weights=cfg.MODEL.weights_net_saliency)
 
-        cfg.MODEL.weights_net_compress = os.path.join(
-            cfg.DIR, 'compress_' + cfg.VAL.checkpoint)
-        assert os.path.exists(cfg.MODEL.weights_net_compress), "checkpoint does not exitst!"
-        net_compress = ModelBuilder.build_net_compress(
-            cfg=cfg,
-            weights=cfg.MODEL.weights_net_compress)
-
-
-
+    cfg.MODEL.weights_net_compress = os.path.join(
+        cfg.DIR, 'compress_' + cfg.VAL.checkpoint)
+    assert os.path.exists(cfg.MODEL.weights_net_compress), "checkpoint does not exitst!"
+    net_compress = ModelBuilder.build_net_compress(
+        cfg=cfg,
+        weights=cfg.MODEL.weights_net_compress)
 
     if 'CITYSCAPES' in cfg.DATASET.root_dataset:
         if cfg.TRAIN.loss_fun == 'NLLLoss':
@@ -419,16 +402,12 @@ def eval_during_train_deform(cfg, writer=None, gpu=0, count=None):
             else:
                 crit = nn.CrossEntropyLoss(ignore_index=-2)
 
-    if cfg.MODEL.fov_deform:
-        segmentation_module = DeformSegmentationModule(net_encoder, net_decoder, net_saliency, net_compress, crit, cfg)
-        # develop check if parameters properly loaded
-        for name, param in segmentation_module.net_compress.named_parameters():
-            if 'conv_last.bias' in name:
-                print ('EVAL\n')
-                print (name, param.data)
-
-    else:
-        segmentation_module = SegmentationModule(net_encoder, net_decoder, crit, cfg)
+    segmentation_module = DeformSegmentationModule(net_encoder, net_decoder, net_saliency, net_compress, crit, cfg)
+    # develop check if parameters properly loaded
+    for name, param in segmentation_module.net_compress.named_parameters():
+        if 'conv_last.bias' in name:
+            print ('EVAL\n')
+            print (name, param.data)
 
     # Dataset and Loader
     dataset_val = ValDataset(
@@ -446,7 +425,6 @@ def eval_during_train_deform(cfg, writer=None, gpu=0, count=None):
 
     segmentation_module.cuda()
 
-
     # Main loop
     if cfg.VAL.dice:
         if cfg.VAL.y_sampled_reverse:
@@ -458,7 +436,6 @@ def eval_during_train_deform(cfg, writer=None, gpu=0, count=None):
             mIoU, acc, mIoU_deformed, acc_deformed, mIoU_y_reverse, acc_y_reverse, relative_eval_y_ysample, ious = evaluate(segmentation_module, loader_val, cfg, gpu, writer=writer, count=count)
         else:
             mIoU, acc, mIoU_deformed, acc_deformed, relative_eval_y_ysample, ious = evaluate(segmentation_module, loader_val, cfg, gpu, writer=writer, count=count)
-
 
     print('Evaluation Done!')
     if cfg.VAL.dice:
@@ -477,57 +454,26 @@ def eval_during_train_deform(cfg, writer=None, gpu=0, count=None):
 def eval_during_train(cfg, writer=None, gpu=0, count=None):
     torch.cuda.set_device(gpu)
 
-    if cfg.MODEL.rev_deform_opt == 1:
-        from saliency_sampler_normal_reverse_saliency import Saliency_Sampler
-    elif cfg.MODEL.rev_deform_opt == 2:
-        from saliency_sampler_normal_reverse_saliency_deconv import Saliency_Sampler
-    elif cfg.MODEL.rev_deform_opt == 3:
-        from saliency_sampler_normal_reverse_deconv_pad import Saliency_Sampler
-    elif cfg.MODEL.rev_deform_opt == 4 or cfg.MODEL.rev_deform_opt == 5 or cfg.MODEL.rev_deform_opt == 6 or cfg.MODEL.rev_deform_opt == 51:
-        from saliency_sampler_inv_fill_NN import Saliency_Sampler
-
-
     # Network Builders
-    if cfg.MODEL.fov_deform:
-        net_encoder = ModelBuilder.build_encoder(
-            arch=cfg.MODEL.arch_encoder.lower(),
-            fc_dim=cfg.MODEL.fc_dim,
-            weights="")
-        if cfg.VAL.no_upsample:
-            net_decoder = ModelBuilder.build_decoder(
-                arch=cfg.MODEL.arch_decoder.lower(),
-                fc_dim=cfg.MODEL.fc_dim,
-                num_class=cfg.DATASET.num_class,
-                weights="",
-                use_softmax=False)
-        else:
-            net_decoder = ModelBuilder.build_decoder(
-                arch=cfg.MODEL.arch_decoder.lower(),
-                fc_dim=cfg.MODEL.fc_dim,
-                num_class=cfg.DATASET.num_class,
-                weights="",
-                use_softmax=True)
+    # absolute paths of model weights
+    cfg.MODEL.weights_encoder = os.path.join(
+        cfg.DIR, 'encoder_' + cfg.VAL.checkpoint)
+    cfg.MODEL.weights_decoder = os.path.join(
+        cfg.DIR, 'decoder_' + cfg.VAL.checkpoint)
+    # load foveation weights
+    assert os.path.exists(cfg.MODEL.weights_encoder) and \
+        os.path.exists(cfg.MODEL.weights_decoder), "checkpoint does not exitst!"
 
-    else:
-        # absolute paths of model weights
-        cfg.MODEL.weights_encoder = os.path.join(
-            cfg.DIR, 'encoder_' + cfg.VAL.checkpoint)
-        cfg.MODEL.weights_decoder = os.path.join(
-            cfg.DIR, 'decoder_' + cfg.VAL.checkpoint)
-        # load foveation weights
-        assert os.path.exists(cfg.MODEL.weights_encoder) and \
-            os.path.exists(cfg.MODEL.weights_decoder), "checkpoint does not exitst!"
-
-        net_encoder = ModelBuilder.build_encoder(
-            arch=cfg.MODEL.arch_encoder.lower(),
-            fc_dim=cfg.MODEL.fc_dim,
-            weights=cfg.MODEL.weights_encoder)
-        net_decoder = ModelBuilder.build_decoder(
-            arch=cfg.MODEL.arch_decoder.lower(),
-            fc_dim=cfg.MODEL.fc_dim,
-            num_class=cfg.DATASET.num_class,
-            weights=cfg.MODEL.weights_decoder,
-            use_softmax=True)
+    net_encoder = ModelBuilder.build_encoder(
+        arch=cfg.MODEL.arch_encoder.lower(),
+        fc_dim=cfg.MODEL.fc_dim,
+        weights=cfg.MODEL.weights_encoder)
+    net_decoder = ModelBuilder.build_decoder(
+        arch=cfg.MODEL.arch_decoder.lower(),
+        fc_dim=cfg.MODEL.fc_dim,
+        num_class=cfg.DATASET.num_class,
+        weights=cfg.MODEL.weights_decoder,
+        use_softmax=True)
 
 
     if 'CITYSCAPES' in cfg.DATASET.root_dataset:
@@ -553,35 +499,7 @@ def eval_during_train(cfg, writer=None, gpu=0, count=None):
                 crit = nn.CrossEntropyLoss(ignore_index=cfg.DATASET.ignore_index)
             else:
                 crit = nn.CrossEntropyLoss(ignore_index=-2)
-    if cfg.MODEL.fov_deform:
-        segmentation_module_plain = SegmentationModule_plain(net_encoder, net_decoder)
-        if cfg.MODEL.track_running_stats:
-            if cfg.MODEL.saliency_net == 'resnet18':
-                saliency_network = saliency_network_resnet18()
-            elif cfg.MODEL.saliency_net == 'resnet18_stride1':
-                saliency_network = saliency_network_resnet18_stride1()
-            elif cfg.MODEL.saliency_net == 'fovsimple':
-                saliency_network = fov_simple(cfg)
-        else:
-            if cfg.MODEL.saliency_net == 'resnet18':
-                saliency_network = saliency_network_resnet18_nonsyn()
-            elif cfg.MODEL.saliency_net == 'resnet10':
-                saliency_network = saliency_network_resnet10_nonsyn()
-            elif cfg.MODEL.saliency_net == 'fovsimple':
-                saliency_network = fov_simple_nonsyn(cfg)
-        segmentation_module_fov_deform = Saliency_Sampler(segmentation_module_plain,saliency_network,cfg.TRAIN.task_input_size,cfg.TRAIN.saliency_input_size,cfg=cfg)
-        segmentation_module = SegmentationModule_fov_deform(segmentation_module_fov_deform, crit, cfg)
-        print('Loading weights model_epoch_last')
-        weights = os.path.join(cfg.DIR, 'model_epoch_last.pth')
-        segmentation_module.load_state_dict(
-            torch.load(weights, map_location=lambda storage, loc: storage), strict=True)
-        for name, param in segmentation_module.net_compress.named_parameters():
-            if 'conv_last.bias' in name:
-                print ('EVAL\n')
-                print (name, param.data)
-
-    else:
-        segmentation_module = SegmentationModule(net_encoder, net_decoder, crit, cfg)
+    segmentation_module = SegmentationModule(net_encoder, net_decoder, crit, cfg)
 
     # Dataset and Loader
     dataset_val = ValDataset(

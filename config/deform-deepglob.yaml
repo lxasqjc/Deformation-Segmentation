@@ -16,7 +16,6 @@ MODEL:
   arch_decoder: "c1"
   fc_dim: 720
   fov_deform: True
-  deep_fov: "deep_fov1"
   in_dim: 3
   naive_upsample: False
   gt_gradient_intrinsic_only: False

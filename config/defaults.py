@@ -39,7 +39,6 @@ _C.DATASET.shuffle_list = True
 _C.DATASET.val_central_crop = False
 _C.DATASET.val_central_crop_shape = (300, 300)
 _C.DATASET.check_dataload = False
-_C.DATASET.tensor_aug = ""
 
 # -----------------------------------------------------------------------------
 # Model
@@ -61,22 +60,13 @@ _C.MODEL.weights_net_compress = ""
 _C.MODEL.fc_dim = 2048
 # option to disable track_running_stats
 _C.MODEL.track_running_stats = True
-
-# foveation implementation
-# Note currently only support training set with identical size/shape
-_C.MODEL.foveation = False
 _C.MODEL.fov_deform = False
 _C.MODEL.naive_upsample = True
 _C.MODEL.deconv = False
-_C.MODEL.rev_deform_opt = 51 # different reverse deformation solutions:
-_C.MODEL.rev_deform_interp = 'tri' # different reverse deformation solutions:
-# 1-inverse saliency+Conv; 2-inverse S+Deconv; 3-original S(pad) + Deconv;
-# 4-fill missing NN during F.grid_sample; 5-fill missing NN at score;
-# 51-fill missing by tensor (diffrienable) based triangular filling;
+_C.MODEL.rev_deform_opt = 51 # 51-fill missing by tensor (diffrienable) based triangular filling;
+_C.MODEL.rev_deform_interp = 'tri' # different reverse deformation solutions
 _C.MODEL.loss_at_high_res = False # choose whether calculate loss after reverse deformation at high resolution domain
-
 _C.MODEL.img_gradient = False
-#
 _C.MODEL.saliency_net = 'fovsimple'
 # set uniform_sample = 'Saliency' to sample/rev_sample based on uniform saliency
 # set uniform_sample = 'BI' to sample/rev_sample by nn.upsample
@@ -90,37 +80,8 @@ _C.MODEL.fix_saliency = 0
 _C.MODEL.gaussian_radius = 30
 # optional change gaussian aspect ratio
 _C.MODEL.gaussian_ap = 0.0
-_C.MODEL.hard_fov = False
-_C.MODEL.hard_grad = 'st_inv' # default straight through + weighed inversely proportionally to the probability of sampling
-# ***central crop pred of hard selected patch with identical area of P1
-_C.MODEL.hard_fov_pred = False
-_C.MODEL.categorical = False # stochastic gradient estimators via torch categorical
-_C.MODEL.inv_categorical = False
-_C.MODEL.gumbel_softmax = False
-_C.MODEL.gumbel_softmax_st = False
-_C.MODEL.gumbel_tau = 1.0
-_C.MODEL.gumbel_tau_anneal = False
-# int select single patch size rather than concatenated tnsor of all patch sizes
-_C.MODEL.hard_select = False
-_C.MODEL.fov_padding = True
-_C.MODEL.deep_fov = ''
-_C.MODEL.fov_normalise = ''
-_C.MODEL.fov_activation = 'relu'
-# Force Gradient from Foveation output to zero at each step
-_C.MODEL.Zero_Step_Grad = False
 # input image channel
 _C.MODEL.in_dim = 3
-# downsample rate for Xlr
-_C.MODEL.fov_map_scale = 100
-# multiscale patch size bank
-_C.MODEL.patch_bank = [1100, 2200, 4400]
-_C.MODEL.patch_ap = 1
-# setting for one-hot fixed patch size baselines
-_C.MODEL.one_hot_patch = []
-_C.MODEL.weights_foveater = ""
-_C.MODEL.weights_fov_res = ""
-_C.MODEL.pre_cropped = False
-_C.MODEL.cropped_lists = []
 _C.MODEL.fix_img_gradient = False
 _C.MODEL.gt_gradient = False
 _C.MODEL.gt_gradient_intrinsic_only = True
@@ -151,7 +112,6 @@ _C.TRAIN.epoch_iters = 5000
 _C.TRAIN.loss_fun = "FocalLoss"
 _C.TRAIN.loss_weight = []
 _C.TRAIN.scale_weight = ""
-_C.TRAIN.deform_second_loss = ""
 # s_entropy_weight should be negative as we want high entropy (more uniform distribution)
 _C.TRAIN.s_entropy_weight = -1.0
 _C.TRAIN.optim = "SGD"
