@@ -49,7 +49,7 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
         if len(batch_data) == 1:
             batch_data = batch_data[0]
             single_gpu_mode = True
-            print('single gpu mode ON \n')
+            # print('single gpu mode ON \n')
             batch_data['img_data'] = batch_data['img_data'].cuda()
             batch_data['seg_label'] = batch_data['seg_label'].cuda()
             batch_data = [batch_data]
@@ -70,7 +70,10 @@ def train(segmentation_module, iterator, optimizers, epoch, cfg, history=None, f
 
         print_grad = None
         if single_gpu_mode:
-            loss, acc, _ = segmentation_module(batch_data[0], writer=writer, count=cur_iter, epoch=epoch)
+            if cfg.TRAIN.deform_joint_loss:
+                loss, acc, edge_loss = segmentation_module(batch_data[0], writer=writer, count=cur_iter, epoch=epoch)
+            else:
+                loss, acc = segmentation_module(batch_data[0], writer=writer, count=cur_iter, epoch=epoch)
         else:
             if cfg.TRAIN.opt_deform_LabelEdge and epoch >= cfg.TRAIN.fix_seg_start_epoch and epoch <= cfg.TRAIN.fix_seg_end_epoch:
                 loss, acc, edge_loss = segmentation_module(batch_data)
