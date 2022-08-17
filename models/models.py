@@ -378,18 +378,22 @@ class DeformSegmentationModule(SegmentationModuleBase):
         return label
 
     def forward(self, feed_dict, *, writer=None, segSize=None, F_Xlr_acc_map=False, count=None, epoch=None, feed_dict_info=None, feed_batch_count=None):
-        if self.cfg.TRAIN.dynamic_task_input[0] != 1: # dealing with varying input image size such as pcahisto dataset
+
+        # EXPLAIN: re initialise apply only when input image has varying size, e.g. pcahisto dataset
+        if self.cfg.TRAIN.dynamic_task_input[0] != 1:
             this_size = tuple(feed_dict['img_data'].shape[-2:])
             print('this_size: {}'.format(this_size))
             self.re_initialise(self.cfg, this_size)
             print('task_input_size after re_initialise: {}'.format(self.input_size_net))
             print('saliency_input_size after re_initialise: {}'.format(self.input_size))
 
+        # EXPLAIN: for each high-resolution image X
         x = feed_dict['img_data']
         del feed_dict['img_data']
-
         t = time.time()
         ori_size = (x.shape[-2],x.shape[-1])
+
+        # EXPLAIN: compute its lower resolution version Xlr
         x_low = b_imresize(x, self.input_size, interp='bilinear')
         epoch = self.cfg.TRAIN.global_epoch
         if segSize is None and ((self.cfg.TRAIN.opt_deform_LabelEdge or self.cfg.TRAIN.deform_joint_loss) and epoch <= self.cfg.TRAIN.deform_pretrain):
@@ -397,6 +401,8 @@ class DeformSegmentationModule(SegmentationModuleBase):
             s = random.randint(min_saliency_len//3, min_saliency_len)
             x_low = nn.AdaptiveAvgPool2d((s,s))(x_low)
             x_low = nn.Upsample(size=self.input_size,mode='bilinear')(x_low)
+
+        # EXPLAIN: calculate deformation/saliency map d=Dθ(Xlr)
         xs = self.localization(x_low)
         xs = self.net_compress(xs)
         xs = nn.Upsample(size=(self.grid_size_x,self.grid_size_y), mode='bilinear')(xs)
@@ -406,12 +412,16 @@ class DeformSegmentationModule(SegmentationModuleBase):
 
         y = feed_dict['seg_label'].clone()
 
+        # EXPLAIN: calculate the target deformation map dt = fedge(fgaus(Ylr)) from the uniformly downsampled segmentation labelYlr
         if self.cfg.MODEL.gt_gradient or (self.cfg.MODEL.uniform_sample == 'BI' and self.cfg.DATASET.num_class == 2):
+        # EXPLAIN: if motivational study (gt_gradient) or uniform downsample (uniform_sample == 'BI')
             xsc = xs.clone().detach()
             for j in range(y.shape[0]):
                 if segSize is not None:
+                    # i.e. if training
                     (y_j_dist, _) = np.histogram(y[j].cpu(), bins=2, range=(0, 1))
                 if self.cfg.MODEL.fix_gt_gradient and not (self.cfg.MODEL.uniform_sample == 'BI' and self.cfg.DATASET.num_class == 2):
+                    # EXPLAIN: for motivational study: simulating a set "edge-based" samplers each at different sampling density around edge
                     y_clone = y.clone().cpu()
                     if self.cfg.MODEL.ignore_gt_labels != []:
                         y_clone = torch.tensor(self.ignore_label(y_clone, self.cfg.MODEL.ignore_gt_labels))
@@ -429,6 +439,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
                     xsc_j = xs_j[0] # 1,W,H
                     xsc[j] = xsc_j
                 if segSize is not None and y_j_dist[1]/y_j_dist.sum() <= 0.001 and self.cfg.DATASET.binary_class != -1:
+                    # exclude corner case
                     print('y_{} do not have enough forground class, skip this sample\n'.format(j))
                     if self.cfg.VAL.y_sampled_reverse:
                         return None, None, None, None
@@ -442,6 +453,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
                 xsc *= xsc_mask
             xs.data = xsc.data.to(xs.device)
         elif self.cfg.TRAIN.opt_deform_LabelEdge or self.cfg.TRAIN.deform_joint_loss:
+        # EXPLAIN: if ours - calculate the target deformation map xs_target for edge_loss
             xs_target = xs.clone().detach()
             for j in range(y.shape[0]):
                 (y_j_dist, _) = np.histogram(y[j].cpu(), bins=2, range=(0, 1))
@@ -475,6 +487,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
                 xs_target_mask[:,:,1*bound:-1*bound,1*bound:-1*bound] += 1.0
                 xs_target *= xs_target_mask
 
+        # EXPLAIN: pad to avoid boundary artifact following A. Recasens et,al. (2018)
         if self.cfg.MODEL.uniform_sample != '':
             xs = xs*0 + 1.0/(self.grid_size_x*self.grid_size_y)
         if self.cfg.TRAIN.def_saliency_pad_mode == 'replication':
@@ -484,27 +497,32 @@ class DeformSegmentationModule(SegmentationModuleBase):
         elif self.cfg.TRAIN.def_saliency_pad_mode == 'zero':
             xs_hm = F.pad(xs, (self.padding_size_y, self.padding_size_y, self.padding_size_x, self.padding_size_x), mode='constant')
 
-        if segSize is None:# training
+        # EXPLAIN: if training
+        if segSize is None:
             if self.cfg.MODEL.gt_gradient and self.cfg.MODEL.gt_gradient_intrinsic_only:
                 return None, None
 
+            # EXPLAIN: pretraining trick following A. Recasens et,al. (2018)
             N_pretraining = self.cfg.TRAIN.deform_pretrain
             epoch = self.cfg.TRAIN.global_epoch
-            # pretrain stage, simplify task of segmentation_module by smoothing x_sampled
-            # non-pretain stage, no smoothing applied
             if self.cfg.TRAIN.deform_pretrain_bol or (epoch>=N_pretraining and (epoch<self.cfg.TRAIN.smooth_deform_2nd_start or epoch>self.cfg.TRAIN.smooth_deform_2nd_end)):
-                p=1 # no random size pooling to x_sampled
+                p=1 # non-pretain stage: no random size pooling to x_sampled
             else:
-                p=0 # random size pooling to x_sampled
+                p=0 # pretrain stage: random size pooling to x_sampled
 
+            # EXPLAIN: construct the deformed sampler Gd (Eq. 3)
             grid, grid_y = self.create_grid(xs_hm)
             if self.cfg.MODEL.loss_at_high_res:
                 xs_inv = 1-xs_hm
                 _, grid_inv_train = self.create_grid(xs_hm, segSize=tuple(np.array(ori_size)//self.cfg.DATASET.segm_downsampling_rate), x_inv=xs_inv)
+
+            # EXPLAIN: during training the labelY is downsampled with the same deformed sampler to get Yˆ = Gd(Y,d) (i.e. y_low)
             if self.cfg.MODEL.uniform_sample == 'BI':
                 y_sampled = nn.Upsample(size=tuple(np.array(self.input_size_net)//self.cfg.DATASET.segm_downsampling_rate), mode='bilinear')(y.float().unsqueeze(1)).long().squeeze(1)
             else:
                 y_sampled = F.grid_sample(y.float().unsqueeze(1), grid_y).squeeze(1)
+
+            # EXPLAIN: calculate the edge loss Le(θ;Xlr,Ylr)=fMSE(d,dt)
             if self.cfg.TRAIN.opt_deform_LabelEdge or self.cfg.TRAIN.deform_joint_loss:
                 assert (xs.shape == xs_target.shape), "xs shape ({}) not equvelent to xs_target shape ({})\n".format(xs.shape, xs_target.shape)
                 if self.cfg.TRAIN.opt_deform_LabelEdge_norm:
@@ -515,30 +533,34 @@ class DeformSegmentationModule(SegmentationModuleBase):
                 else:
                     edge_loss = self.crit_mse(xs, xs_target)
                     edge_acc = self.pixel_acc(xs.long(), xs_target.long())
-                # print("Edge loss: {}\n".format(edge_loss))
-                # print("Epoch {} edge_loss_scale={}".format(epoch, self.cfg.TRAIN.edge_loss_scale))
                 edge_loss *= self.cfg.TRAIN.edge_loss_scale
-                # print("Scaled Edge loss: {}\n".format(edge_loss))
+
+                # EXPLAIN: for staged training when traing with only the edge loss
                 if self.cfg.TRAIN.opt_deform_LabelEdge and epoch >= self.cfg.TRAIN.fix_seg_start_epoch and epoch <= self.cfg.TRAIN.fix_seg_end_epoch:
                     return edge_loss, edge_acc, edge_loss
 
+            # EXPLAIN: computes the downsampled image X^ =Gd(X,d)
             if self.cfg.MODEL.uniform_sample == 'BI':
                 x_sampled = nn.Upsample(size=self.input_size_net, mode='bilinear')(x)
             else:
                 x_sampled = F.grid_sample(x, grid)
+
+            # EXPLAIN: pretraining trick following A. Recasens et,al. (2018)
             if random.random()>p:
                 min_saliency_len = min(self.input_size)
                 s = random.randint(min_saliency_len//3, min_saliency_len)
                 x_sampled = nn.AdaptiveAvgPool2d((s,s))(x_sampled)
                 x_sampled = nn.Upsample(size=self.input_size_net,mode='bilinear')(x_sampled)
 
+            # EXPLAIN: The downsampled image X^ is then fed into the segmentation network to
+            # estimate the corresponding segmentation probabilities Pˆ =Sϕ(Xˆ)
             if self.deep_sup_scale is not None: # use deep supervision technique
                 (pred, pred_deepsup) = self.decoder(self.encoder(x_sampled, return_feature_maps=True))
             else:
                 pred = self.decoder(self.encoder(x_sampled, return_feature_maps=True))
             torch.cuda.reset_max_memory_allocated(0)
 
-        #     # Y sampling
+            # EXPLAIN: ablation, if calculate loss at high resolution, inverse upsample the prediction to high-res space
             if self.cfg.MODEL.loss_at_high_res and self.cfg.MODEL.uniform_sample == 'BI':
                 pred_sampled_train = nn.Upsample(size=ori_size, mode='bilinear')(x)
             elif self.cfg.MODEL.loss_at_high_res:
@@ -549,19 +571,19 @@ class DeformSegmentationModule(SegmentationModuleBase):
                 for n in range(pred_sampled_train.shape[0]):
                     pred_sampled_train[n] = fillMissingValues_tensor(pred_sampled_train[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
 
+            # change variable naming
             if self.deep_sup_scale is not None: # use deep supervision technique
                 pred, pred_deepsup = pred, pred_deepsup
-
             if self.cfg.MODEL.loss_at_high_res:
                 pred,image_output,hm,_,pred_sampled = pred,x_sampled,xs,y_sampled,pred_sampled_train
             else:
                 pred,image_output,hm,feed_dict['seg_label'] = pred,x_sampled,xs,y_sampled.long()
-
             # del xs, x_sampled, x
             if self.cfg.MODEL.loss_at_high_res:
                 del pred_sampled_train
             del y_sampled
 
+            # EXPLAIN: end of training, calculate loss and return
             if self.cfg.MODEL.loss_at_high_res:
                 pred_sampled[torch.isnan(pred_sampled)] = 0 # assign residual missing with 0 probability
                 loss = self.crit(pred_sampled, feed_dict['seg_label'])
@@ -573,21 +595,24 @@ class DeformSegmentationModule(SegmentationModuleBase):
             if self.cfg.TRAIN.deform_joint_loss:
                 # print('seg loss: {}, scaled edge_loss: {}\n'.format(loss, edge_loss))
                 loss = loss + edge_loss
-
             if self.cfg.MODEL.loss_at_high_res:
                 acc = self.pixel_acc(pred_sampled, feed_dict['seg_label'])
             else:
                 acc = self.pixel_acc(pred, feed_dict['seg_label'])
-
             if self.cfg.TRAIN.deform_joint_loss:
                 return loss, acc, edge_loss
             else:
                 return loss, acc
-        else:# # inference
+
+        # EXPLAIN: if inference
+        else:
             t = time.time()
+            # EXPLAIN: at inference, calculate both the non-uniform downsampler (grid) and upsampler (grid_inv)
             xs_inv = 1-xs_hm
             grid, grid_inv = self.create_grid(xs_hm, segSize=segSize, x_inv=xs_inv)
             _, grid_y = self.create_grid(xs_hm, segSize=segSize)
+
+            # EXPLAIN: computes the downsampled image X^ =Gd(X,d)
             if self.cfg.MODEL.uniform_sample == 'BI':
                 x_sampled = nn.Upsample(size=self.input_size_net_infer, mode='bilinear')(x)
             else:
@@ -596,14 +621,20 @@ class DeformSegmentationModule(SegmentationModuleBase):
 
             segSize_temp = tuple(self.input_size_net_infer)
             print('eval segSize_temp: {}'.format(segSize_temp))
+
+            # EXPLAIN: The downsampled image X^ is then fed into the segmentation network to
+            # estimate the corresponding segmentation probabilities Pˆ =Sϕ(Xˆ)
             x = self.decoder(self.encoder(x_sampled, return_feature_maps=True), segSize=segSize_temp)
-        #     # Y sampling
+
+            # EXPLAIN: downsample and upsample label y for calculating the intrinsic upsampling error IoU(Y′,Y)
             if self.cfg.MODEL.uniform_sample == 'BI':
                 y_sampled = nn.Upsample(size=tuple(np.array(self.input_size_net_infer)), mode='bilinear')(y.float().unsqueeze(1)).long().squeeze(1)
             else:
                 y_sampled = F.grid_sample(y.float().unsqueeze(1), grid_y, mode='nearest').long().squeeze(1)
 
+            # EXPLAIN: inverse upsample the prediction and low resolution label to high-res space
             if self.cfg.MODEL.uniform_sample == 'BI' or self.cfg.MODEL.uniform_sample == 'nearest':
+                # uniform case
                 if self.cfg.MODEL.uniform_sample == 'BI':
                     pred_sampled = nn.Upsample(size=segSize, mode='bilinear')(x)
                 elif self.cfg.MODEL.uniform_sample == 'nearest':
@@ -615,8 +646,8 @@ class DeformSegmentationModule(SegmentationModuleBase):
                 if self.cfg.VAL.x_sampled_reverse:
                     x_sampled_unorm = unorm(x_sampled)
                     x_sampled_reverse =  nn.Upsample(size=segSize, mode='bilinear')(x_sampled_unorm)
-
             elif self.cfg.MODEL.rev_deform_opt == 51:
+                # ours deformed case
                 pred_sampled_unfilled_mask_2d = torch.isnan(grid_inv[:,:,:,0])
                 grid_inv[torch.isnan(grid_inv)] = 0
                 pred_sampled = F.grid_sample(x, grid_inv.float())
@@ -629,6 +660,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
                     else:
                         pred_sampled[n] = fillMissingValues_tensor(pred_sampled[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
 
+                # for visualisation purpose: downsample and upsample image x
                 if self.cfg.VAL.x_sampled_reverse:
                     x_sampled_unorm = unorm(x_sampled)
                     x_sampled_reverse = F.grid_sample(x_sampled_unorm, grid_inv.float())
@@ -642,6 +674,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
                             x_sampled_reverse[n] = fillMissingValues_tensor(x_sampled_reverse[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
                             x_sampled_reverse[n][torch.isnan(x_sampled_reverse[n])] = x_sampled_reverse[n][~torch.isnan(x_sampled_reverse[n])].mean()
 
+                # for visualisation and calculating the intrinsic upsampling error IoU(Y′,Y) purpose
                 if self.cfg.VAL.y_sampled_reverse:
                     if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
                         y_sampled_reverse = F.grid_sample(y_sampled.float().unsqueeze(1), grid_inv.float(), mode='nearest').squeeze(1)
@@ -667,14 +700,14 @@ class DeformSegmentationModule(SegmentationModuleBase):
                             y_sampled_score_reverse[n] = fillMissingValues_tensor(y_sampled_score_reverse[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
                         _, y_sampled_reverse = torch.max(y_sampled_score_reverse, dim=1)
 
-            ## FILL residual missing
+            # post processing FILL residual missing
             if feed_batch_count != None:
                 if feed_batch_count < self.cfg.VAL.batch_size:
                     self.num_res_nan_percentage = []
                 self.num_res_nan_percentage.append(float(torch.isnan(pred_sampled).sum()*100.0) / float(pred_sampled.shape[0]*pred_sampled.shape[1]*pred_sampled.shape[2]*pred_sampled.shape[3]))
             pred_sampled[torch.isnan(pred_sampled)] = 0 # assign residual missing with 0 probability
 
-            #================ transfer original ... = self.seg_deform ...
+            # change variable naming
             if self.cfg.VAL.no_upsample:
                 pred,image_output,hm = x,x_sampled,xs
             else:
@@ -682,7 +715,8 @@ class DeformSegmentationModule(SegmentationModuleBase):
                     pred,image_output,hm,pred_sampled,pred_sampled_unfilled_mask_2d = x,x_sampled,xs,pred_sampled,pred_sampled_unfilled_mask_2d
                 else:
                     pred,image_output,hm,pred_sampled = x,x_sampled,xs,pred_sampled
-            #================ visualisation ================
+
+            # EXPLAIN: for visualisation only
             if (writer is not None and feed_batch_count < 4 and feed_batch_count != None) or self.cfg.TRAIN.train_eval_visualise:
                 if self.cfg.TRAIN.train_eval_visualise:
                     dir_result = os.path.join(self.cfg.DIR, "visual_epoch_{}".format(epoch))
@@ -839,11 +873,12 @@ class DeformSegmentationModule(SegmentationModuleBase):
                         writer.add_image('eval_{}/Interpolated Deformed Pred unfilled'.format(feed_batch_count*self.cfg.VAL.batch_size+i), pred_print_sampled_unfilled, count)
 
                 self.print_original_y = False
-            #================ end visualisation ================
+
             if writer is not None and feed_batch_count == -1 and feed_batch_count != None:
                 print('EVAL: pred_sampled num residual nan percentage: {} %\n'.format(np.array(self.num_res_nan_percentage).mean()))
                 writer.add_scalar('Residual_nan_percentage_eval', np.array(self.num_res_nan_percentage).mean(), count)
 
+            # finish inference and return
             if F_Xlr_acc_map:
                 loss = self.crit(pred_sampled, feed_dict['seg_label'])
                 return pred_sampled, loss
