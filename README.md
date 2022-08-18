@@ -53,7 +53,8 @@ $SEG_ROOT/data
 ````
 note Histo_MRI is the PCa-histo dataset
 
-3. Data list .odgt files are provided in ```./data``` prepare correspondingly for local datasets
+3. Data list .odgt files are provided in ```./data``` prepare correspondingly for local datasets. (Note: for cityscapes please check its ```./data/Cityscape/*.odgt```, in my example I removed the city subfolders and put all images under one folder, if your data tree is different please modify accordingly
+```e.g. change "images/training/tubingen_000025_000019_leftImg8bit.png" to "images/training/tubingen/000025_000019_leftImg8bit.png"```
 
 
 ## Reproduce
