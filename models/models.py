@@ -320,17 +320,22 @@ class DeformSegmentationModule(SegmentationModuleBase):
         P = P.expand(x.size(0),2,self.grid_size_x+2*self.padding_size_x, self.grid_size_y+2*self.padding_size_y)
         # input x is saliency map xs
         x_cat = torch.cat((x,x),1)
+        # EXPLAIN: denominator of Eq. (3)
         p_filter = self.filter(x)
         x_mul = torch.mul(P,x_cat).view(-1,1,self.global_size_x,self.global_size_y)
         all_filter = self.filter(x_mul).view(-1,2,self.grid_size_x,self.grid_size_y)
+        # EXPLAIN: numerator of Eq. (3)
         x_filter = all_filter[:,0,:,:].contiguous().view(-1,1,self.grid_size_x,self.grid_size_y)
         y_filter = all_filter[:,1,:,:].contiguous().view(-1,1,self.grid_size_x,self.grid_size_y)
+        # EXPLAIN: Eq. (3)
         x_filter = x_filter/p_filter
         y_filter = y_filter/p_filter
+        # EXPLAIN: fit F.grid_sample format (coordibates in the range [-1,1])
         xgrids = x_filter*2-1
         ygrids = y_filter*2-1
         xgrids = torch.clamp(xgrids,min=-1,max=1)
         ygrids = torch.clamp(ygrids,min=-1,max=1)
+        # EXPLAIN: reshape
         xgrids = xgrids.view(-1,1,self.grid_size_x,self.grid_size_y)
         ygrids = ygrids.view(-1,1,self.grid_size_x,self.grid_size_y)
         grid = torch.cat((xgrids,ygrids),1)
@@ -339,6 +344,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
             grid = nn.Upsample(size=self.input_size_net_infer, mode='bilinear')(grid)
         else:
             grid = nn.Upsample(size=self.input_size_net, mode='bilinear')(grid)
+        # EXPLAIN: grid_y for downsampling label y, to handle segmentation architectures whose prediction are not same size with input x
         if segSize is None:# training
             grid_y = nn.Upsample(size=tuple(np.array(self.input_size_net)//self.cfg.DATASET.segm_downsampling_rate), mode='bilinear')(grid)
         else:# inference
