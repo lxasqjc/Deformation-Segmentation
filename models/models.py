@@ -568,11 +568,11 @@ class DeformSegmentationModule(SegmentationModuleBase):
 
             # EXPLAIN: ablation, if calculate loss at high resolution, inverse upsample the prediction to high-res space
             if self.cfg.MODEL.loss_at_high_res and self.cfg.MODEL.uniform_sample == 'BI':
-                pred_sampled_train = nn.Upsample(size=ori_size, mode='bilinear')(x)
+                pred_sampled_train = nn.Upsample(size=ori_size, mode='bilinear')(pred)
             elif self.cfg.MODEL.loss_at_high_res:
                 unfilled_mask_2d = torch.isnan(grid_inv_train[:,:,:,0])
                 grid_inv_train[torch.isnan(grid_inv_train)] = 0
-                pred_sampled_train = F.grid_sample(x, grid_inv_train.float())
+                pred_sampled_train = F.grid_sample(pred, grid_inv_train.float())
                 pred_sampled_train[unfilled_mask_2d.unsqueeze(1).expand(pred_sampled_train.shape)] = float('nan')
                 for n in range(pred_sampled_train.shape[0]):
                     pred_sampled_train[n] = fillMissingValues_tensor(pred_sampled_train[n], interp_mode=self.cfg.MODEL.rev_deform_interp)
