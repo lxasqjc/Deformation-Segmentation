@@ -165,7 +165,7 @@ class BaseDataset(torch.utils.data.Dataset):
                 # gleason2019 322 train mean and std applied
                 mean=[0.8223, 0.7783, 0.7847],
                 std=[0.210, 0.216, 0.241])
-        elif 'DeepGlob' in opt.root_dataset or 'DeepGlob' in opt.list_train:
+        elif 'DeepGlob' in opt.root_dataset or 'deepglob' in opt.root_dataset or 'DeepGlob' in opt.list_train:
             # ignore_label=7
             if opt.ignore_index == 0:
                 self.label_mapping = {0: 2,
