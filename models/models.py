@@ -170,37 +170,6 @@ def fillMissingValues_tensor(target_for_interp, copy=False, interp_mode='tri'):
             pass
     return target_for_interp
 
-def unorm(img):
-    if 'GLEASON' in self.cfg.DATASET.list_train:
-        mean=[0.748, 0.611, 0.823]
-        std=[0.146, 0.245, 0.119]
-    elif 'Digest' in self.cfg.DATASET.list_train:
-        mean=[0.816, 0.697, 0.792]
-        std=[0.160, 0.277, 0.198]
-    elif 'ADE' in self.cfg.DATASET.list_train:
-        mean=[0.485, 0.456, 0.406]
-        std=[0.229, 0.224, 0.225]
-    elif 'CITYSCAPE' in self.cfg.DATASET.list_train or 'Cityscape' in self.cfg.DATASET.list_train:
-        mean=[0.485, 0.456, 0.406]
-        std=[0.229, 0.224, 0.225]
-    elif 'histo' in self.cfg.DATASET.list_train:
-        mean=[0.8223, 0.7783, 0.7847]
-        std=[0.210, 0.216, 0.241]
-    elif 'DeepGlob' in self.cfg.DATASET.list_train:
-        mean=[0.282, 0.379, 0.408]
-        std=[0.089, 0.101, 0.127]
-    elif 'Face_single_example' in self.cfg.DATASET.root_dataset or 'Face_single_example' in self.cfg.DATASET.list_train:
-        mean=[0.282, 0.379, 0.408]
-        std=[0.089, 0.101, 0.127]
-    elif 'Histo' in self.cfg.DATASET.root_dataset or 'histomri' in self.cfg.DATASET.list_train or 'histomri' in self.cfg.DATASET.root_dataset:
-        mean=[0.8223, 0.7783, 0.7847]
-        std=[0.210, 0.216, 0.241]
-    else:
-        raise Exception('Unknown root for normalisation!')
-    for t, m, s in zip(img, mean, std):
-        t.mul_(s).add_(m)
-    return img
-
 class CompressNet(nn.Module):
     def __init__(self, cfg):
         super(CompressNet, self).__init__()
@@ -275,7 +244,38 @@ class DeformSegmentationModule(SegmentationModuleBase):
                     self.P_basis[k,i,j] = k*(i-self.padding_size_x)/(self.grid_size_x-1.0)+(1.0-k)*(j-self.padding_size_y)/(self.grid_size_y-1.0)
 
         self.save_print_grad = [{'saliency_grad': 0.0, 'check1_grad': 0.0, 'check2_grad': 0.0} for _ in range(cfg.TRAIN.num_gpus)]
-
+    
+    def unorm(self, img):
+        if 'GLEASON' in self.cfg.DATASET.list_train:
+            mean=[0.748, 0.611, 0.823]
+            std=[0.146, 0.245, 0.119]
+        elif 'Digest' in self.cfg.DATASET.list_train:
+            mean=[0.816, 0.697, 0.792]
+            std=[0.160, 0.277, 0.198]
+        elif 'ADE' in self.cfg.DATASET.list_train:
+            mean=[0.485, 0.456, 0.406]
+            std=[0.229, 0.224, 0.225]
+        elif 'CITYSCAPE' in self.cfg.DATASET.list_train or 'Cityscape' in self.cfg.DATASET.list_train:
+            mean=[0.485, 0.456, 0.406]
+            std=[0.229, 0.224, 0.225]
+        elif 'histo' in self.cfg.DATASET.list_train:
+            mean=[0.8223, 0.7783, 0.7847]
+            std=[0.210, 0.216, 0.241]
+        elif 'DeepGlob' in self.cfg.DATASET.list_train or 'deepglob' in self.cfg.DATASET.root_dataset:
+            mean=[0.282, 0.379, 0.408]
+            std=[0.089, 0.101, 0.127]
+        elif 'Face_single_example' in self.cfg.DATASET.root_dataset or 'Face_single_example' in self.cfg.DATASET.list_train:
+            mean=[0.282, 0.379, 0.408]
+            std=[0.089, 0.101, 0.127]
+        elif 'Histo' in self.cfg.DATASET.root_dataset or 'histomri' in self.cfg.DATASET.list_train or 'histomri' in self.cfg.DATASET.root_dataset:
+            mean=[0.8223, 0.7783, 0.7847]
+            std=[0.210, 0.216, 0.241]
+        else:
+            raise Exception('Unknown root for normalisation!')
+        for t, m, s in zip(img, mean, std):
+            t.mul_(s).add_(m)
+        return img
+    
     def re_initialise(self, cfg, this_size):# dealing with varying input image size such as pcahisto dataset
         this_size_short = min(this_size)
         this_size_long = max(this_size)
@@ -650,7 +650,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
                     assert (self.cfg.MODEL.rev_deform_interp == 'nearest'), "y_sampled_reverse only appliable to nearest rev_deform_interp"
                     y_sampled_reverse =  nn.Upsample(size=segSize, mode='nearest')(y_sampled.float().unsqueeze(1)).squeeze(1)
                 if self.cfg.VAL.x_sampled_reverse:
-                    x_sampled_unorm = unorm(x_sampled)
+                    x_sampled_unorm = self.unorm(x_sampled)
                     x_sampled_reverse =  nn.Upsample(size=segSize, mode='bilinear')(x_sampled_unorm)
             elif self.cfg.MODEL.rev_deform_opt == 51:
                 # ours deformed case
@@ -668,7 +668,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
 
                 # for visualisation purpose: downsample and upsample image x
                 if self.cfg.VAL.x_sampled_reverse:
-                    x_sampled_unorm = unorm(x_sampled)
+                    x_sampled_unorm = self.unorm(x_sampled)
                     x_sampled_reverse = F.grid_sample(x_sampled_unorm, grid_inv.float())
                     x_sampled_reverse[pred_sampled_unfilled_mask_2d.unsqueeze(1).expand(x_sampled_reverse.shape)] = float('nan')
                     if self.cfg.MODEL.rev_deform_interp == 'nearest' or self.cfg.MODEL.rev_deform_interp == 'BI':
@@ -787,7 +787,7 @@ class DeformSegmentationModule(SegmentationModuleBase):
                     del grid_resized
 
                 image_output = image_output.data
-                image_output = unorm(image_output)
+                image_output = self.unorm(image_output)
 
                 hm = hm.data
                 hm_max, _ = hm.view(hm.shape[0],-1).max(dim=1)
