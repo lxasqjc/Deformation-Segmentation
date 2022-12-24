@@ -100,6 +100,11 @@ def evaluate(segmentation_module, loader, cfg, gpu, foveation_module=None, write
         acc_meter_y_reverse = AverageMeter()
         intersection_meter_y_reverse = AverageMeter()
         union_meter_y_reverse = AverageMeter()
+    
+    # Add creation of 'result' folder for visualization in case it doesn't exist
+    if cfg.VAL.visualize:
+        if not os.path.isdir(os.path.join(cfg.DIR, "result")):
+            os.makedirs(os.path.join(cfg.DIR, "result"))
 
     segmentation_module.eval()
 
@@ -554,8 +559,5 @@ if __name__ == '__main__':
         cfg.DIR, 'decoder_' + cfg.VAL.checkpoint)
     assert os.path.exists(cfg.MODEL.weights_encoder) and \
         os.path.exists(cfg.MODEL.weights_decoder), "checkpoint does not exitst!"
-
-    if not os.path.isdir(os.path.join(cfg.DIR, "result")):
-        os.makedirs(os.path.join(cfg.DIR, "result"))
 
     main(cfg, args.gpu)
